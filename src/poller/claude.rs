@@ -335,6 +335,16 @@ fn refresh_or_fallback(mut credentials: Credentials) -> Result<Credentials, Poll
         }
 
         let source = credentials.source.clone();
+        if !super::active_token_refresh_enabled() {
+            // Passive mode: the user's own CLI session renews the token, and the
+            // credential watcher resumes polling once the file changes. Starting
+            // `claude -p .` here would be a real API call that spends the very
+            // quota this tool reports.
+            diagnose::log(format!(
+                "credentials from {source:?} are expired and active token refresh is off; waiting for a user login"
+            ));
+            return Err(PollError::TokenExpired);
+        }
         cli_refresh_token(&source);
 
         match read_credentials_from_source(&source) {

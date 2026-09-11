@@ -81,6 +81,14 @@ pub(super) fn poll_codex() -> Result<UsageData, PollError> {
 
     match fetch_codex_usage(&creds.access_token, creds.account_id.as_deref()) {
         Ok(data) => Ok(data),
+        Err(PollError::AuthRequired) if !super::active_token_refresh_enabled() => {
+            // Passive mode: wait for the user's own `codex` session to renew the
+            // credentials rather than starting the agent CLI ourselves.
+            diagnose::log(
+                "Codex rejected the token and active token refresh is off; waiting for a user login",
+            );
+            Err(PollError::TokenExpired)
+        }
         Err(PollError::AuthRequired) => {
             cli_refresh_codex_token();
             let refreshed = read_codex_credentials().ok_or(PollError::TokenExpired)?;

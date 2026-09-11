@@ -1,4 +1,15 @@
 use super::*;
+use std::sync::atomic::AtomicU32;
+
+/// True while the surface has been lifted out of a full taskbar and is floating
+/// above it. The renderer uses this to paint an opaque backdrop, since a
+/// floating surface no longer has the taskbar behind its transparent pixels.
+static FLOATING_FALLBACK: AtomicBool = AtomicBool::new(false);
+/// Taskbar background colour sampled when the surface began floating, as
+/// 0xAARRGGBB.
+static FLOAT_BACKDROP: AtomicU32 = AtomicU32::new(0xFF20_2020);
+/// True while the displayed readings are stale because polling has stopped.
+static FROZEN_READINGS: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn position_at_taskbar() {
     refresh_dpi();
@@ -108,6 +119,287 @@ pub(super) fn position_at_taskbar() {
     }
 }
 
+/// Decide whether a taskbar-hosted surface has to float instead, and where.
+///
+/// Returns `Some((x, y))` in screen pixels when the running-application strip
+/// leaves too little room for a `width`-wide surface in front of the
+/// notification area. Returns `None` when the surface fits, or when the taskbar
+/// cannot be measured — an unmeasurable taskbar keeps the previous in-taskbar
+/// behaviour rather than relocating the widget on a guess.
+fn taskbar_float_placement(
+    taskbar: &native_interop::TaskbarWindow,
+    display: RECT,
+    width: i32,
+    height: i32,
+) -> Option<(i32, i32)> {
+    let layout = match crate::taskbar_layout::query(taskbar.hwnd) {
+        Some(layout) if !layout.fits(width) => layout,
+        // Fits, or the taskbar could not be measured: stay hosted in the
+        // taskbar rather than relocating the widget on a guess.
+        _ => {
+            set_floating_fallback(false, 0);
+            return None;
+        }
+    };
+    if !FLOATING_FALLBACK.load(Ordering::Relaxed) {
+        diagnose::log(format!(
+            "taskbar gap {}px is too small for a {width}px surface (apps end at {}, tray starts at {}, overflow button {}); floating above the taskbar",
+            layout.available_width(),
+            layout.apps_right,
+            layout.tray_left,
+            if layout.overflow_visible { "shown" } else { "hidden" }
+        ));
+    }
+    set_floating_fallback(true, sample_taskbar_backdrop(taskbar, &layout));
+    Some(clamp_float_origin(
+        saved_float_origin().unwrap_or_else(|| default_float_origin(taskbar, display, width, height)),
+        display,
+        width,
+        height,
+    ))
+}
+
+/// Where the widget floats before the user has dragged it: snapped to the right
+/// edge of the screen, sitting directly above the taskbar.
+///
+/// The surface must clear the taskbar entirely. Both are topmost windows, so an
+/// overlapping surface loses the z-order race whenever the shell is activated
+/// and simply vanishes behind it.
+fn default_float_origin(
+    taskbar: &native_interop::TaskbarWindow,
+    display: RECT,
+    width: i32,
+    height: i32,
+) -> (i32, i32) {
+    (display.right - width, taskbar.rect.top - height)
+}
+
+fn saved_float_origin() -> Option<(i32, i32)> {
+    let state = lock_state();
+    let state = state.as_ref()?;
+    Some((state.float_x?, state.float_y?))
+}
+
+/// Keep a floating origin on screen so a display change cannot strand the
+/// widget outside every monitor.
+pub(super) fn clamp_float_origin(
+    origin: (i32, i32),
+    display: RECT,
+    width: i32,
+    height: i32,
+) -> (i32, i32) {
+    let (x, y) = origin;
+    let max_x = (display.right - width).max(display.left);
+    let max_y = (display.bottom - height).max(display.top);
+    (x.clamp(display.left, max_x), y.clamp(display.top, max_y))
+}
+
+pub(super) fn set_floating_fallback(active: bool, backdrop: u32) {
+    FLOATING_FALLBACK.store(active, Ordering::Relaxed);
+    if active {
+        FLOAT_BACKDROP.store(backdrop, Ordering::Relaxed);
+    }
+}
+
+pub(super) fn floating_fallback_active() -> bool {
+    FLOATING_FALLBACK.load(Ordering::Relaxed)
+}
+
+/// True while the surface is showing readings that are no longer being
+/// refreshed, because polling stopped before the displayed figures could be
+/// replaced.
+pub(super) fn frozen_readings() -> bool {
+    FROZEN_READINGS.load(Ordering::Relaxed)
+}
+
+pub(super) fn set_frozen_readings(frozen: bool) {
+    FROZEN_READINGS.store(frozen, Ordering::Relaxed);
+}
+
+/// Drop a premultiplied 0xAARRGGBB pixel to its luminance, keeping its alpha.
+///
+/// Rec. 601 luma weights, the same ones GDI and most desktop software use for
+/// greyscale. Premultiplied channels stay premultiplied: scaling all three by
+/// the same alpha commutes with the weighted sum.
+pub(super) fn desaturate_if(pixel: u32, frozen: bool) -> u32 {
+    if !frozen {
+        return pixel;
+    }
+    let alpha = pixel & 0xFF00_0000;
+    let r = (pixel >> 16) & 0xFF;
+    let g = (pixel >> 8) & 0xFF;
+    let b = pixel & 0xFF;
+    // +500 rounds to nearest instead of truncating.
+    let luma = ((299 * r + 587 * g + 114 * b) + 500) / 1000;
+    let luma = luma.min(255);
+    alpha | (luma << 16) | (luma << 8) | luma
+}
+
+/// Read the taskbar's own background colour so the floating surface can sit on
+/// a matching opaque panel instead of showing whatever window is behind it.
+///
+/// The midpoint of the measured gap is guaranteed to be bare taskbar: it lies
+/// between the last app button and the first tray icon.
+fn sample_taskbar_backdrop(
+    taskbar: &native_interop::TaskbarWindow,
+    layout: &crate::taskbar_layout::TaskbarLayout,
+) -> u32 {
+    const FALLBACK: u32 = 0xFF20_2020;
+    let x = (layout.apps_right + layout.tray_left) / 2;
+    let y = taskbar.rect.top + (taskbar.rect.bottom - taskbar.rect.top) / 2;
+    unsafe {
+        let screen_dc = GetDC(None);
+        if screen_dc.is_invalid() {
+            return FALLBACK;
+        }
+        let color = GetPixel(screen_dc, x, y);
+        ReleaseDC(None, screen_dc);
+        // GetPixel reports CLR_INVALID (0xFFFFFFFF) when the point is not on
+        // the device surface.
+        if color.0 == 0xFFFF_FFFF {
+            return FALLBACK;
+        }
+        // COLORREF is 0x00BBGGRR; the render buffer is 0xAARRGGBB.
+        let r = color.0 & 0xFF;
+        let g = (color.0 >> 8) & 0xFF;
+        let b = (color.0 >> 16) & 0xFF;
+        0xFF00_0000 | (r << 16) | (g << 8) | b
+    }
+}
+
+/// Composite one premultiplied 0xAARRGGBB source pixel over an opaque backdrop.
+///
+/// `UpdateLayeredWindow` with `ULW_ALPHA` consumes premultiplied colour, so the
+/// source channels are already scaled by their own alpha and only the backdrop
+/// needs weighting by the remaining coverage.
+pub(super) fn composite_over(source: u32, backdrop: u32) -> u32 {
+    let alpha = source >> 24;
+    if alpha == 0xFF {
+        return source;
+    }
+    let inverse = 255 - alpha;
+    let blend = |shift: u32| {
+        let src = (source >> shift) & 0xFF;
+        let dst = (backdrop >> shift) & 0xFF;
+        // +127 rounds to nearest rather than truncating, which keeps flat fills
+        // from drifting a shade darker than the taskbar they sit against.
+        (src + (dst * inverse + 127) / 255).min(255) << shift
+    };
+    0xFF00_0000 | blend(16) | blend(8) | blend(0)
+}
+
+#[cfg(test)]
+mod float_tests {
+    use super::*;
+
+    const SCREEN: RECT = RECT {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+
+    #[test]
+    fn opaque_backdrop_shows_through_transparent_pixels() {
+        let backdrop = 0xFF1E_3A3A;
+        // A fully transparent source must come out as the backdrop itself, so
+        // the floating panel reads as solid rather than showing the desktop.
+        assert_eq!(composite_over(0x0000_0000, backdrop), backdrop);
+    }
+
+    #[test]
+    fn opaque_source_pixels_are_untouched() {
+        assert_eq!(composite_over(0xFFAB_CDEF, 0xFF1E_3A3A), 0xFFAB_CDEF);
+    }
+
+    #[test]
+    fn composite_always_yields_full_alpha() {
+        for alpha in [0x00u32, 0x01, 0x7F, 0xFE, 0xFF] {
+            let source = (alpha << 24) | 0x0010_2030;
+            assert_eq!(composite_over(source, 0xFF40_5060) >> 24, 0xFF);
+        }
+    }
+
+    #[test]
+    fn composite_channels_never_overflow() {
+        // Premultiplied white at half coverage over white must clamp, not wrap.
+        let result = composite_over(0x80FF_FFFF, 0xFFFF_FFFF);
+        assert_eq!(result, 0xFFFF_FFFF);
+    }
+
+    #[test]
+    fn frozen_readings_render_without_colour() {
+        // Pure red, green and blue must collapse onto the grey axis.
+        for colour in [0xFFFF_0000u32, 0xFF00_FF00, 0xFF00_00FF, 0xFF12_3456] {
+            let grey = desaturate_if(colour, true);
+            let r = (grey >> 16) & 0xFF;
+            let g = (grey >> 8) & 0xFF;
+            let b = grey & 0xFF;
+            assert_eq!(r, g, "channels must match for {colour:#010x}");
+            assert_eq!(g, b, "channels must match for {colour:#010x}");
+        }
+    }
+
+    #[test]
+    fn desaturation_preserves_alpha_and_is_opt_in() {
+        // Alpha carries the surface's shape and hit-testing, so it must survive.
+        assert_eq!(desaturate_if(0x80FF_0000, true) >> 24, 0x80);
+        assert_eq!(desaturate_if(0x0012_3456, true) >> 24, 0x00);
+        // Live readings keep every colour untouched.
+        assert_eq!(desaturate_if(0xFF12_3456, false), 0xFF12_3456);
+    }
+
+    #[test]
+    fn desaturation_matches_rec601_luma() {
+        // The widget's orange accent, and pure white which must stay white.
+        assert_eq!(desaturate_if(0xFFFF_FFFF, true), 0xFFFF_FFFF);
+        assert_eq!(desaturate_if(0xFF00_0000, true), 0xFF00_0000);
+        // 0.299*255 = 76.2 -> 76
+        assert_eq!(desaturate_if(0xFFFF_0000, true) & 0xFF, 76);
+        // 0.587*255 = 149.7 -> 150
+        assert_eq!(desaturate_if(0xFF00_FF00, true) & 0xFF, 150);
+    }
+
+    #[test]
+    fn default_origin_snaps_to_the_right_screen_edge() {
+        let taskbar = native_interop::TaskbarWindow {
+            hwnd: HWND::default(),
+            rect: RECT {
+                left: 0,
+                top: 1032,
+                right: 1920,
+                bottom: 1080,
+            },
+        };
+        // Flush with the right edge, clearing the 48px-tall taskbar.
+        assert_eq!(
+            default_float_origin(&taskbar, SCREEN, 217, 46),
+            (1703, 986)
+        );
+    }
+
+    #[test]
+    fn dragged_origin_stays_on_screen() {
+        assert_eq!(
+            clamp_float_origin((5000, 5000), SCREEN, 217, 46),
+            (1703, 1034)
+        );
+        assert_eq!(clamp_float_origin((-400, -400), SCREEN, 217, 46), (0, 0));
+        assert_eq!(
+            clamp_float_origin((800, 500), SCREEN, 217, 46),
+            (800, 500),
+            "a position already on screen must not be moved"
+        );
+    }
+
+    #[test]
+    fn clamp_survives_a_surface_wider_than_the_screen() {
+        // max_x would go negative without the guard, and clamp() panics when
+        // its low bound exceeds its high bound.
+        assert_eq!(clamp_float_origin((100, 100), SCREEN, 4000, 46), (0, 100));
+    }
+}
+
 pub(super) fn reset_layered_window(hwnd: HWND) {
     unsafe {
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
@@ -169,15 +461,30 @@ pub(super) fn render_custom_window(
         }
         let old = SelectObject(memory_dc, bitmap.into());
         let window_pixels = std::slice::from_raw_parts_mut(bits as *mut u32, rendered.pixels.len());
-        for (target, source) in window_pixels.iter_mut().zip(&rendered.pixels) {
-            // Windows normally lets mouse input pass through zero-alpha pixels in
-            // layered windows. A nearly transparent pixel keeps the full surface
-            // interactive without changing the theme renderer's pixel output.
-            *target = if source >> 24 == 0 {
-                0x0100_0000
-            } else {
-                *source
-            };
+        // A taskbar-hosted surface shows the taskbar through its transparent
+        // pixels. Once it floats clear of the taskbar there is nothing behind
+        // it but whatever window happens to be there, so composite the theme
+        // over an opaque panel in the taskbar's own colour instead.
+        // Figures that are no longer being refreshed are drawn without colour,
+        // so a surface that has quietly stopped updating cannot be mistaken for
+        // a live one.
+        let frozen = frozen_readings();
+        if floating_fallback_active() {
+            let backdrop = FLOAT_BACKDROP.load(Ordering::Relaxed);
+            for (target, source) in window_pixels.iter_mut().zip(&rendered.pixels) {
+                *target = composite_over(desaturate_if(*source, frozen), backdrop);
+            }
+        } else {
+            for (target, source) in window_pixels.iter_mut().zip(&rendered.pixels) {
+                // Windows normally lets mouse input pass through zero-alpha pixels in
+                // layered windows. A nearly transparent pixel keeps the full surface
+                // interactive without changing the theme renderer's pixel output.
+                *target = if source >> 24 == 0 {
+                    0x0100_0000
+                } else {
+                    desaturate_if(*source, frozen)
+                };
+            }
         }
         let source = POINT { x: 0, y: 0 };
         let size = SIZE {
@@ -281,6 +588,24 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
                     let _ = ShowWindow(hwnd, SW_HIDE);
                     return;
                 };
+                // Hosting inside the taskbar is only correct while the strip of
+                // running-application buttons leaves a wide enough gap in front
+                // of the notification area. When it does not, sitting there
+                // would cover the app buttons and the "..." overflow button,
+                // so float just above the taskbar instead.
+                if let Some(float) = taskbar_float_placement(taskbar, display.rect, width, height) {
+                    native_interop::make_popup(hwnd, true);
+                    let _ = SetWindowPos(
+                        hwnd,
+                        Some(HWND_TOPMOST),
+                        float.0,
+                        float.1,
+                        width,
+                        height,
+                        SWP_NOACTIVATE,
+                    );
+                    return;
+                }
                 native_interop::embed_as_child(hwnd, taskbar.hwnd);
                 let mut point = [POINT { x, y }];
                 MapWindowPoints(None, Some(taskbar.hwnd), &mut point);
@@ -295,6 +620,10 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
                 );
             }
             SurfaceNest::Desktop => {
+                // Only a taskbar-hosted surface is ever lifted out to float, so
+                // every other nest must clear the flag or a stale value would
+                // keep forcing this window topmost and painting a backdrop.
+                set_floating_fallback(false, 0);
                 if let Some(desktop) = native_interop::find_desktop_host() {
                     if GetParent(hwnd).ok() != Some(desktop.parent) {
                         native_interop::embed_as_child(hwnd, desktop.parent);
@@ -317,9 +646,14 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
                 }
             }
             SurfaceNest::TrayIcon => {
+                set_floating_fallback(false, 0);
                 let _ = ShowWindow(hwnd, SW_HIDE);
             }
             SurfaceNest::Floating | SurfaceNest::Auto => {
+                // A deliberately floating theme draws its own background, so it
+                // keeps the theme's own transparency rather than the taskbar
+                // backdrop used by the full-taskbar fallback.
+                set_floating_fallback(false, 0);
                 native_interop::make_popup(hwnd, true);
                 let _ = SetWindowPos(
                     hwnd,

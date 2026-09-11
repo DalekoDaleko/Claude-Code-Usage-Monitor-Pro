@@ -15,7 +15,7 @@ use windows::Win32::UI::Accessibility::HWINEVENTHOOK;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, ReleaseCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+    GetDoubleClickTime, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -30,7 +30,8 @@ use crate::diagnose;
 use crate::localization::{self, LanguageId, Strings};
 use crate::models::AppUsageData;
 use crate::native_interop::{
-    self, TIMER_CLOCK, TIMER_COUNTDOWN, TIMER_MOUSE_CLICK, TIMER_POLL, TIMER_RESET_POLL,
+    self, TIMER_BACKDROP_RESAMPLE, TIMER_CLOCK, TIMER_COUNTDOWN, TIMER_MOUSE_CLICK, TIMER_POLL,
+    TIMER_RESET_POLL,
     TIMER_TRAY_HOVER, TIMER_UPDATE_CHECK, TIMER_WINDOW_STATE, WM_APP_OPEN_DASHBOARD, WM_APP_QUIT,
     WM_APP_REFRESH_NOW, WM_APP_SETTINGS_UPDATED, WM_APP_TRAY, WM_APP_USAGE_UPDATED,
 };
@@ -113,8 +114,17 @@ struct AppState {
     drag_start_client_x: i32,
     drag_start_offset: i32,
 
+    /// Position the user dragged the surface to while it floated clear of a
+    /// full taskbar. `None` until the first drag, which leaves the surface
+    /// snapped to the right edge of the screen.
+    float_x: Option<i32>,
+    float_y: Option<i32>,
+    /// In-progress floating drag, if any.
+    float_drag: Option<FloatDrag>,
+
     custom_theme_enabled: bool,
     usage_countdown: bool,
+    active_token_refresh: bool,
     active_theme_path: Option<PathBuf>,
     active_theme: Option<ThemeDocument>,
     theme_clock_interval: Option<Duration>,
@@ -137,7 +147,6 @@ struct PendingMouseClick {
 enum UpdateStatus {
     Idle,
     Checking,
-    Applying,
     UpToDate,
     Available(ReleaseDescriptor),
 }
@@ -541,6 +550,9 @@ fn save_state_settings() {
             .active_theme_path
             .as_ref()
             .map(|path| path.to_string_lossy().to_string());
+        persisted.active_token_refresh = s.active_token_refresh;
+        persisted.float_x = s.float_x;
+        persisted.float_y = s.float_y;
         // The dashboard process owns its dimensions, so leave the freshly
         // loaded values unchanged when monitor actions persist settings.
         if let Err(error) = save_settings(&persisted) {
@@ -794,6 +806,160 @@ fn taskbar_at_point(pt: POINT) -> Option<(usize, native_interop::TaskbarWindow)>
         })
 }
 
+/// A left-button press on a floating surface, before we know whether the user
+/// meant to click something or to move the widget.
+#[derive(Clone, Copy, Debug)]
+struct FloatDrag {
+    /// Screen position of the cursor when the button went down.
+    origin_cursor: POINT,
+    /// Screen position of the surface's top-left corner at the same moment.
+    origin_window: (i32, i32),
+    /// Set once the pointer travels past `FLOAT_DRAG_THRESHOLD`, after which the
+    /// gesture is a move and the pending click is abandoned.
+    moved: bool,
+}
+
+/// How far the pointer must travel before a press becomes a drag. Without a
+/// threshold, the few pixels of movement in an ordinary click would nudge the
+/// widget and swallow the click action.
+const FLOAT_DRAG_THRESHOLD: i32 = 4;
+
+/// Begin tracking a possible floating drag. Returns false when the surface is
+/// hosted in the taskbar, where Explorer owns placement and the existing
+/// tray-offset drag applies instead.
+pub(super) fn begin_float_drag(hwnd: HWND) -> bool {
+    if !positioning::floating_fallback_active() {
+        return false;
+    }
+    let mut cursor = POINT::default();
+    let mut rect = RECT::default();
+    unsafe {
+        if GetCursorPos(&mut cursor).is_err() || GetWindowRect(hwnd, &mut rect).is_err() {
+            return false;
+        }
+        SetCapture(hwnd);
+    }
+    let mut state = lock_state();
+    if let Some(state) = state.as_mut() {
+        state.float_drag = Some(FloatDrag {
+            origin_cursor: cursor,
+            origin_window: (rect.left, rect.top),
+            moved: false,
+        });
+    }
+    true
+}
+
+/// Move the floating surface with the pointer. Returns true once the gesture has
+/// passed the movement threshold, which tells the caller to skip hover updates.
+pub(super) fn update_float_drag(hwnd: HWND) -> bool {
+    let Some(drag) = (match lock_state().as_ref() {
+        Some(state) => state.float_drag,
+        None => None,
+    }) else {
+        return false;
+    };
+
+    let mut cursor = POINT::default();
+    if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+        return drag.moved;
+    }
+    let dx = cursor.x - drag.origin_cursor.x;
+    let dy = cursor.y - drag.origin_cursor.y;
+    if !drag.moved && dx.abs() < FLOAT_DRAG_THRESHOLD && dy.abs() < FLOAT_DRAG_THRESHOLD {
+        return false;
+    }
+
+    let (width, height) = {
+        let state = lock_state();
+        match state.as_ref() {
+            Some(state) => (
+                total_widget_width_for_state(state),
+                total_widget_height_for_state(state),
+            ),
+            None => return false,
+        }
+    };
+    let display = native_interop::find_monitors()
+        .into_iter()
+        .map(|monitor| monitor.rect)
+        .find(|rect| {
+            let (x, y) = (cursor.x, cursor.y);
+            x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
+        })
+        .unwrap_or(RECT {
+            left: 0,
+            top: 0,
+            right: i32::MAX,
+            bottom: i32::MAX,
+        });
+
+    let origin = positioning::clamp_float_origin(
+        (drag.origin_window.0 + dx, drag.origin_window.1 + dy),
+        display,
+        width,
+        height,
+    );
+    native_interop::move_window(hwnd, origin.0, origin.1, width, height);
+
+    let mut state = lock_state();
+    if let Some(state) = state.as_mut() {
+        if let Some(drag) = state.float_drag.as_mut() {
+            drag.moved = true;
+        }
+        state.float_x = Some(origin.0);
+        state.float_y = Some(origin.1);
+    }
+    true
+}
+
+/// Finish a floating drag. Returns true when the surface actually moved, in
+/// which case the caller must not also treat the release as a click.
+pub(super) fn end_float_drag() -> bool {
+    let drag = {
+        let mut state = lock_state();
+        match state.as_mut() {
+            Some(state) => state.float_drag.take(),
+            None => None,
+        }
+    };
+    let Some(drag) = drag else {
+        return false;
+    };
+    unsafe {
+        let _ = ReleaseCapture();
+    }
+    if drag.moved {
+        save_state_settings();
+    }
+    drag.moved
+}
+
+/// Windows message numbers that are not exposed by the `windows` crate bindings
+/// this project uses.
+pub(super) const WM_THEMECHANGED_MSG: u32 = 0x031A;
+pub(super) const WM_DWMCOLORIZATIONCOLORCHANGED_MSG: u32 = 0x0320;
+
+/// How long to wait for the shell to repaint before re-reading the taskbar
+/// colour. Explorer redraws asynchronously after announcing a theme change, so
+/// an immediate sample returns the colour that is on its way out.
+const BACKDROP_RESAMPLE_DELAY_MS: u32 = 400;
+
+/// Queue a single delayed re-read of the taskbar backdrop colour.
+///
+/// Restarting the timer on each message coalesces the burst of notifications
+/// Windows sends for one theme switch into a single re-sample.
+pub(super) fn schedule_backdrop_resample(hwnd: HWND) {
+    unsafe {
+        SetTimer(
+            Some(hwnd),
+            TIMER_BACKDROP_RESAMPLE,
+            BACKDROP_RESAMPLE_DELAY_MS,
+            None,
+        );
+    }
+}
+
 fn tray_left_for_taskbar(taskbar_hwnd: HWND, taskbar_rect: RECT) -> i32 {
     let mut tray_left = taskbar_rect.right;
     if let Some(tray_hwnd) = native_interop::find_child_window(taskbar_hwnd, "TrayNotifyWnd") {
@@ -950,7 +1116,7 @@ fn begin_update_check(hwnd: HWND, interactive: bool) {
 
         if matches!(
             app_state.update_status,
-            UpdateStatus::Checking | UpdateStatus::Applying
+            UpdateStatus::Checking
         ) {
             if interactive {
                 show_info_message(
@@ -1041,56 +1207,28 @@ fn begin_update_check(hwnd: HWND, interactive: bool) {
     });
 }
 
+/// Tell the user a portable build has an update waiting.
+///
+/// Portable installs no longer download and swap their own executable, so this
+/// points at the Releases page instead of replacing the running binary with an
+/// unverified download. WinGet installs still update in place.
 fn begin_update_apply(hwnd: HWND, release: ReleaseDescriptor) {
-    let send_hwnd = SendHwnd::from_hwnd(hwnd);
     let strings = {
         let mut state = lock_state();
         let Some(app_state) = state.as_mut() else {
             return;
         };
-
-        if matches!(
-            app_state.update_status,
-            UpdateStatus::Checking | UpdateStatus::Applying
-        ) {
-            show_info_message(
-                hwnd,
-                app_state.language.strings().updates,
-                app_state.language.strings().update_in_progress,
-            );
-            return;
-        }
-
-        app_state.update_status = UpdateStatus::Applying;
+        // The release stays recorded as available so the tray menu keeps
+        // offering it after this dialog is dismissed.
+        app_state.update_status = UpdateStatus::Available(release.clone());
         app_state.language.strings()
     };
 
-    std::thread::spawn(move || {
-        let hwnd = send_hwnd.to_hwnd();
-        match updater::begin_self_update(&release) {
-            Ok(()) => unsafe {
-                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
-            },
-            Err(error) => {
-                {
-                    let mut state = lock_state();
-                    if let Some(s) = state.as_mut() {
-                        s.update_status = UpdateStatus::Available(release);
-                    }
-                }
-                let message = format!("{}.\n\n{}", strings.update_failed, error);
-                show_error_message(hwnd, strings.updates, &message);
-                unsafe {
-                    let _ = PostMessageW(
-                        Some(hwnd),
-                        WM_APP_UPDATE_CHECK_COMPLETE,
-                        WPARAM(0),
-                        LPARAM(0),
-                    );
-                }
-            }
-        }
-    });
+    show_info_message(
+        hwnd,
+        strings.updates,
+        &updater::portable_update_message(&release),
+    );
 }
 
 fn begin_winget_update(hwnd: HWND) {
@@ -1289,6 +1427,11 @@ fn apply_custom_theme(
     sync_window_state_timer(hwnd);
     schedule_countdown_timer();
     schedule_clock_timer();
+    // The reset above drops the surface to NOTOPMOST so a theme that nests in
+    // the taskbar or the desktop starts from a clean z-order. Re-apply the
+    // placement now instead of leaving the surface stranded behind other
+    // windows until some unrelated event happens to trigger a reposition.
+    position_at_taskbar();
     Ok(())
 }
 
@@ -1652,6 +1795,7 @@ pub fn run() {
         }
 
         let mut settings = load_settings();
+        poller::set_active_token_refresh(settings.active_token_refresh);
         let classic_theme_path = theme_engine::ensure_starter_theme().ok();
         let mut configured_theme_path = settings.active_theme_path.as_deref().map(PathBuf::from);
         let mut configured_theme = configured_theme_path
@@ -1824,8 +1968,12 @@ pub fn run() {
                 drag_start_mouse_x: 0,
                 drag_start_client_x: 0,
                 drag_start_offset: 0,
+                float_x: settings.float_x,
+                float_y: settings.float_y,
+                float_drag: None,
                 custom_theme_enabled,
                 usage_countdown: settings.usage_countdown,
+                active_token_refresh: settings.active_token_refresh,
                 active_theme_path,
                 active_theme,
                 theme_clock_interval,
@@ -1924,6 +2072,9 @@ fn render_layered() {
         let Some(state) = state.as_ref() else {
             return;
         };
+        // Readings are frozen once a poll has failed while figures are still on
+        // screen: what is drawn no longer reflects a successful fetch.
+        positioning::set_frozen_readings(!state.last_poll_ok && state.data.is_some());
         (
             state.hwnd,
             effective_theme_from_state(state),
@@ -2359,6 +2510,8 @@ fn reload_external_settings(hwnd: HWND) {
         state.poll_interval_ms = settings.poll_interval_ms;
         state.providers = settings.enabled_providers();
         state.usage_countdown = settings.usage_countdown;
+        state.active_token_refresh = settings.active_token_refresh;
+        poller::set_active_token_refresh(settings.active_token_refresh);
         state.taskbar_index = settings.taskbar_index;
         apply_language_to_state(state, language_override);
     }

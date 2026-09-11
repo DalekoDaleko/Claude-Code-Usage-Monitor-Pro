@@ -16,8 +16,15 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
-        WM_DISPLAYCHANGE | WM_DPICHANGED_MSG | WM_SETTINGCHANGE => {
+        WM_DISPLAYCHANGE
+        | WM_DPICHANGED_MSG
+        | WM_SETTINGCHANGE
+        | WM_THEMECHANGED_MSG
+        | WM_DWMCOLORIZATIONCOLORCHANGED_MSG => {
             refresh_theme_host_geometry();
+            // The taskbar may have been rebuilt at a new size or on a new
+            // monitor, so the cached gap measurement no longer applies.
+            crate::taskbar_layout::invalidate();
             if msg == WM_DPICHANGED_MSG {
                 let new_dpi = (wparam.0 & 0xFFFF) as u32;
                 CURRENT_DPI.store(new_dpi, Ordering::Relaxed);
@@ -30,6 +37,27 @@ pub(super) unsafe extern "system" fn wnd_proc(
             position_at_taskbar();
             render_layered();
             sync_tray_icon(hwnd);
+            // Repositioning re-reads the taskbar's colour for the floating
+            // backdrop, but the shell has not necessarily repainted itself in
+            // the new theme yet, so that read can still return the old colour.
+            // Sample again shortly afterwards, once the repaint has landed.
+            if matches!(
+                msg,
+                WM_SETTINGCHANGE | WM_THEMECHANGED_MSG | WM_DWMCOLORIZATIONCOLORCHANGED_MSG
+            ) {
+                schedule_backdrop_resample(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_BACKDROP_RESAMPLE => {
+            let _ = KillTimer(Some(hwnd), TIMER_BACKDROP_RESAMPLE);
+            // Only the floating surface paints a sampled backdrop; a
+            // taskbar-hosted one shows the real taskbar through its
+            // transparent pixels and needs no re-read.
+            if positioning::floating_fallback_active() {
+                position_at_taskbar();
+                render_layered();
+            }
             LRESULT(0)
         }
         WM_TIMER => {
@@ -155,6 +183,24 @@ pub(super) unsafe extern "system" fn wnd_proc(
         }
         WM_SETCURSOR if set_surface_cursor(hwnd) => LRESULT(1),
         WM_SETCURSOR => DefWindowProcW(hwnd, msg, wparam, lparam),
+        // A floating surface must stay above every ordinary window. Re-asserting
+        // topmost only when we reposition is not enough: activating another
+        // window re-sorts the z-order in between, which is what makes the widget
+        // appear to sink behind some windows but not others. Pinning the
+        // insert-after here catches every z-order change, whoever caused it.
+        WM_WINDOWPOSCHANGING if positioning::floating_fallback_active() => {
+            let position = lparam.0 as *mut WINDOWPOS;
+            if !position.is_null() {
+                (*position).hwndInsertAfter = HWND_TOPMOST;
+                (*position).flags &= !SWP_NOZORDER;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_LBUTTONDOWN => {
+            begin_float_drag(hwnd);
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE if update_float_drag(hwnd) => LRESULT(0),
         WM_MOUSEMOVE => {
             let is_dragging = {
                 let state = lock_state();
@@ -280,6 +326,11 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            // A completed drag consumes the release: the user was moving the
+            // widget, not clicking what happens to be under the pointer.
+            if end_float_drag() {
+                return LRESULT(0);
+            }
             let suppressed = {
                 let mut state = lock_state();
                 state.as_mut().is_some_and(|state| {

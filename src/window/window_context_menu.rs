@@ -207,7 +207,7 @@ pub(super) fn context_menu_action_flags(
     let disabled = matches!(
         action,
         ContextMenuAction::CheckForUpdates
-            if matches!(state.update_status, UpdateStatus::Checking | UpdateStatus::Applying)
+            if matches!(state.update_status, UpdateStatus::Checking)
     ) || matches!(
         action,
         ContextMenuAction::LayerActions { .. } | ContextMenuAction::ToggleLayerRender { .. }

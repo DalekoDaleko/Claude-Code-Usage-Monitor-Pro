@@ -7,7 +7,7 @@ use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
-use windows::Win32::UI::Shell::{SHAppBarMessage, ABM_GETTASKBARPOS, APPBARDATA};
+use windows::Win32::UI::Shell::{ShellExecuteW, SHAppBarMessage, ABM_GETTASKBARPOS, APPBARDATA};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 // Window style constants
@@ -28,6 +28,9 @@ pub const TIMER_WINDOW_STATE: usize = 5;
 pub const TIMER_MOUSE_CLICK: usize = 6;
 pub const TIMER_TRAY_HOVER: usize = 7;
 pub const TIMER_CLOCK: usize = 8;
+/// One-shot retry that re-reads the taskbar colour once the shell has finished
+/// repainting after a theme or accent-colour change.
+pub const TIMER_BACKDROP_RESAMPLE: usize = 9;
 
 // Custom messages
 pub const WM_APP: u32 = 0x8000;
@@ -187,6 +190,79 @@ pub fn window_class_name(hwnd: HWND) -> Option<String> {
     }
 }
 
+/// Open a web link in the user's default browser.
+///
+/// `eframe` is built here with `default-features = false`, which drops its
+/// URL-opening backend and turns `Context::open_url` into a silent no-op, so
+/// links have to be handed to the shell directly.
+///
+/// Only `http` and `https` are accepted. `ShellExecuteW` will happily launch a
+/// local executable or a registered protocol handler, and themes and context
+/// menus are user-editable JSON, so anything else is refused rather than run.
+pub fn open_in_browser(url: &str) -> bool {
+    let lowercase = url.trim().to_ascii_lowercase();
+    if !(lowercase.starts_with("http://") || lowercase.starts_with("https://")) {
+        crate::diagnose::log(format!("refusing to open a non-web link: {url}"));
+        return false;
+    }
+
+    let verb = wide_str("open");
+    let target = wide_str(url.trim());
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR::from_raw(verb.as_ptr()),
+            PCWSTR::from_raw(target.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // ShellExecuteW reports success as a pseudo-handle greater than 32.
+    let ok = result.0 as isize > 32;
+    if !ok {
+        crate::diagnose::log(format!(
+            "ShellExecuteW could not open {url} (code {})",
+            result.0 as isize
+        ));
+    }
+    ok
+}
+
+#[cfg(test)]
+mod open_in_browser_tests {
+    use super::*;
+
+    #[test]
+    fn refuses_links_that_are_not_web_pages() {
+        // ShellExecuteW would treat each of these as something to launch.
+        for url in [
+            "file:///C:/Windows/System32/cmd.exe",
+            "C:\\Windows\\System32\\cmd.exe",
+            "cmd.exe",
+            "javascript:alert(1)",
+            "ms-settings:windowsupdate",
+            "\\\\server\\share\\payload.exe",
+            "",
+        ] {
+            assert!(!open_in_browser(url), "must refuse {url:?}");
+        }
+    }
+
+    #[test]
+    fn scheme_check_ignores_case_and_padding() {
+        // Only the guard is exercised here; a real open would launch a browser.
+        let accepted = |url: &str| {
+            let lowercase = url.trim().to_ascii_lowercase();
+            lowercase.starts_with("http://") || lowercase.starts_with("https://")
+        };
+        assert!(accepted("  https://github.com/CodeZeno/Claude-Code-Usage-Monitor  "));
+        assert!(accepted("HTTPS://EXAMPLE.COM"));
+        assert!(!accepted("https:/example.com"));
+        assert!(!accepted("ftp://example.com"));
+    }
+}
+
 /// Embed our window as a child of the taskbar
 pub fn embed_in_taskbar(hwnd: HWND, taskbar_hwnd: HWND) {
     embed_as_child(hwnd, taskbar_hwnd);
@@ -232,6 +308,12 @@ pub fn make_popup(hwnd: HWND, topmost: bool) {
         let new_style = (style & !WS_CHILD_STYLE & !WS_CLIPSIBLINGS_STYLE) | WS_POPUP_STYLE;
         let _ = SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
         let _ = SetParent(hwnd, None);
+        // `SetParent(NULL)` re-roots the window on the desktop but leaves the
+        // former host as its *owner*, and an owned window's z-order is pinned to
+        // its owner's. While the taskbar still owns this surface, requesting
+        // HWND_TOPMOST succeeds yet never sets WS_EX_TOPMOST, so the surface
+        // stays behind ordinary windows. Drop the ownership too.
+        let _ = SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, 0);
 
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
         let ex_style = if topmost {

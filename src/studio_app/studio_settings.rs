@@ -59,6 +59,18 @@ impl StudioApp {
                 setting_separator(ui);
                 setting_row(
                     ui,
+                    language.text("Enable active token refresh"),
+                    language.text("Renews expired tokens using a little of your quota"),
+                    |ui| {
+                        changed |= Toggle::new(&mut self.settings.active_token_refresh)
+                            .labels(language.text("Enabled"), language.text("Disabled"))
+                            .show(ui)
+                            .changed();
+                    },
+                );
+                setting_separator(ui);
+                setting_row(
+                    ui,
                     language.text("Start with Windows"),
                     language.text("Launch the monitor when you sign in"),
                     |ui| {

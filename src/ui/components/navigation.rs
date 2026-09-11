@@ -51,7 +51,7 @@ pub(crate) fn github_link(ui: &mut egui::Ui, url: &str) -> egui::Response {
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(url);
     if response.clicked() {
-        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+        crate::native_interop::open_in_browser(url);
     }
     response
 }

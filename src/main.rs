@@ -12,6 +12,7 @@ mod native_interop;
 mod poller;
 mod providers;
 mod studio_app;
+mod taskbar_layout;
 mod theme;
 mod theme_engine;
 mod theme_package;

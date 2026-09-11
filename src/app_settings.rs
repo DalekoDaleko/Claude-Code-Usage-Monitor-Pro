@@ -66,6 +66,19 @@ pub struct SettingsFile {
     pub dashboard_width: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dashboard_height: Option<f32>,
+    /// Whether the monitor may start the provider CLI (`claude -p .`) to renew
+    /// an expired token. That is a real API call, so it spends a little of the
+    /// quota this tool reports. With it off the monitor stays passive and waits
+    /// for the user's own CLI session to refresh the credentials file.
+    #[serde(default = "default_true")]
+    pub active_token_refresh: bool,
+    /// Where the user dragged the widget while it was floating clear of a full
+    /// taskbar. Absent until the widget is dragged, in which case it snaps to
+    /// the right edge of the screen above the taskbar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub float_x: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub float_y: Option<i32>,
 }
 
 impl Default for SettingsFile {
@@ -89,6 +102,9 @@ impl Default for SettingsFile {
             active_theme_path: None,
             dashboard_width: None,
             dashboard_height: None,
+            active_token_refresh: true,
+            float_x: None,
+            float_y: None,
         }
     }
 }

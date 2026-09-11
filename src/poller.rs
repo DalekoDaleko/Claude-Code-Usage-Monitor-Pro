@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,6 +21,22 @@ pub enum CredentialWatchMode {
 }
 
 pub type CredentialWatchSnapshot = Vec<String>;
+
+/// Whether an expired token may be renewed by starting the provider's own CLI.
+///
+/// Polling runs on a worker thread with no access to application state, so the
+/// user's choice is mirrored here rather than threaded through every call.
+/// Defaults to enabled so behaviour matches the stored setting before the first
+/// `set_active_token_refresh` call lands.
+static ACTIVE_TOKEN_REFRESH: AtomicBool = AtomicBool::new(true);
+
+pub fn set_active_token_refresh(enabled: bool) {
+    ACTIVE_TOKEN_REFRESH.store(enabled, Ordering::Relaxed);
+}
+
+pub(crate) fn active_token_refresh_enabled() -> bool {
+    ACTIVE_TOKEN_REFRESH.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PollFailure {
