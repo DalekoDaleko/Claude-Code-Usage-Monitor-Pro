@@ -327,6 +327,14 @@ mod tests {
             "Delete context menu?",
             "Delete context menu",
             "Are you sure you want to delete {name} from the asset library and all themes using it?",
+            "Enable active token refresh",
+            "Renews expired tokens using a little of your quota",
+            "About",
+            "Active providers",
+            "Valid until",
+            "Expired",
+            "No expiry date stored",
+            "No sign-in found",
         ];
 
         for language in LanguageId::ALL
