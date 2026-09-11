@@ -143,6 +143,7 @@ impl StudioApp {
             context_menu_selection: None,
             context_menu_action_helper: None,
             delete_context_menu_confirmation: None,
+            about: Default::default(),
         }
     }
 
@@ -813,6 +814,7 @@ impl StudioApp {
                         })
                         .show(ui, |ui| {
                             ui.set_width(DEFAULT_MENU_WIDTH - 16.0);
+                            let previous_page = self.page;
                             nav(
                                 ui,
                                 &mut self.page,
@@ -832,6 +834,10 @@ impl StudioApp {
                                 language.text("Context Menus"),
                             );
                             nav(ui, &mut self.page, Page::Assets, language.text("Assets"));
+                            nav(ui, &mut self.page, Page::About, language.text("About"));
+                            if self.page == Page::About && previous_page != Page::About {
+                                self.about.invalidate();
+                            }
                             ui.allocate_ui_with_layout(
                                 ui.available_size(),
                                 egui::Layout::bottom_up(egui::Align::Min),
@@ -877,6 +883,7 @@ impl StudioApp {
                         Page::Studio => self.studio_page(ui),
                         Page::ContextMenus => self.context_menus_page(ui),
                         Page::Assets => self.assets_page(ui),
+                        Page::About => self.about_page(ui),
                     }
                 },
             );

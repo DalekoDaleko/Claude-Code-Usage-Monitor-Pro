@@ -170,6 +170,85 @@ struct ProviderPoller {
     id: ProviderId,
     poll: fn() -> Result<UsageData, PollError>,
     credential_watch: fn(bool) -> CredentialWatchSnapshot,
+    sign_in: fn() -> Option<SignInReport>,
+}
+
+/// Where a provider's sign-in comes from, for the dashboard's About page.
+/// Carries a description and an expiry time, never the credential itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignInReport {
+    /// English catalogue key naming the kind of sign-in.
+    pub source: &'static str,
+    /// Which one, where that helps: an environment variable, a file, a distro.
+    pub detail: Option<String>,
+    /// When the token stops being accepted, if the credential records it.
+    pub expires_at: Option<SystemTime>,
+}
+
+impl SignInReport {
+    fn new(source: &'static str) -> Self {
+        Self {
+            source,
+            detail: None,
+            expires_at: None,
+        }
+    }
+
+    fn detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    fn expires_at(mut self, expires_at: Option<SystemTime>) -> Self {
+        self.expires_at = expires_at;
+        self
+    }
+}
+
+/// Where `provider` takes its sign-in from right now, read from this PC
+/// without contacting the provider. `None` when no sign-in is found.
+pub fn sign_in_report(provider: ProviderId) -> Option<SignInReport> {
+    provider_poller(provider).and_then(|poller| (poller.sign_in)())
+}
+
+/// The `exp` claim of a JWT. The signature is not checked: this only reads
+/// when a token already on this PC says it expires, to show the user.
+fn jwt_expiry(token: &str) -> Option<SystemTime> {
+    let payload = token.split('.').nth(1)?;
+    let claims: serde_json::Value = serde_json::from_slice(&base64_url_decode(payload)?).ok()?;
+    let seconds = claims.get("exp")?.as_f64()?;
+    (seconds.is_finite() && seconds > 0.0)
+        .then(|| UNIX_EPOCH.checked_add(Duration::from_secs(seconds as u64)))
+        .flatten()
+}
+
+/// Unpadded base64url, as used in JWTs. Rejects anything else, including
+/// input whose last character carries bits beyond the final byte.
+fn base64_url_decode(input: &str) -> Option<Vec<u8>> {
+    if input.len() % 4 == 1 {
+        return None;
+    }
+    let mut output = Vec::with_capacity(input.len() * 3 / 4);
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+    for byte in input.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'-' => 62,
+            b'_' => 63,
+            _ => return None,
+        } as u32;
+        buffer = (buffer << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            output.push(((buffer >> bits) & 0xff) as u8);
+        }
+    }
+    let padding_mask = (1u32 << bits).saturating_sub(1);
+    (buffer & padding_mask == 0).then_some(output)
 }
 
 const PROVIDER_POLLERS: [ProviderPoller; 6] = [
@@ -177,31 +256,37 @@ const PROVIDER_POLLERS: [ProviderPoller; 6] = [
         id: ProviderId::Claude,
         poll: claude::poll_claude_code,
         credential_watch: claude::credential_watch_snapshot,
+        sign_in: claude::sign_in_report,
     },
     ProviderPoller {
         id: ProviderId::Codex,
         poll: codex::poll_codex,
         credential_watch: codex_credential_watch_snapshot,
+        sign_in: codex::sign_in_report,
     },
     ProviderPoller {
         id: ProviderId::Antigravity,
         poll: antigravity::poll_antigravity,
         credential_watch: antigravity_credential_watch_snapshot,
+        sign_in: antigravity::sign_in_report,
     },
     ProviderPoller {
         id: ProviderId::OpenCode,
         poll: opencode::poll_opencode,
         credential_watch: opencode::credential_watch_snapshot,
+        sign_in: opencode::sign_in_report,
     },
     ProviderPoller {
         id: ProviderId::Cursor,
         poll: cursor::poll_cursor,
         credential_watch: cursor::credential_watch_snapshot,
+        sign_in: cursor::sign_in_report,
     },
     ProviderPoller {
         id: ProviderId::Copilot,
         poll: copilot::poll_copilot,
         credential_watch: copilot::credential_watch_snapshot,
+        sign_in: copilot::sign_in_report,
     },
 ];
 

@@ -384,3 +384,52 @@ fn all_failed_providers_can_carry_their_previous_readings() {
     assert_eq!(claude.session.percentage, 21.0);
     assert!(claude.stale, "the carried reading must be marked stale");
 }
+
+/// Unpadded base64url, to build test JWTs.
+fn base64_url(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut encoded = String::new();
+    for chunk in bytes.chunks(3) {
+        let bits = chunk.iter().enumerate().fold(0u32, |bits, (index, byte)| {
+            bits | u32::from(*byte) << (16 - 8 * index)
+        });
+        for index in 0..=chunk.len() {
+            encoded.push(char::from(
+                TABLE[((bits >> (18 - 6 * index)) & 63) as usize],
+            ));
+        }
+    }
+    encoded
+}
+
+fn jwt_with_claims(claims: &str) -> String {
+    format!(
+        "{}.{}.signature",
+        base64_url(br#"{"alg":"RS256"}"#),
+        base64_url(claims.as_bytes())
+    )
+}
+
+#[test]
+fn a_jwt_expiry_is_read_from_its_exp_claim() {
+    let expected = Some(UNIX_EPOCH + Duration::from_secs(1_800_000_000));
+    assert_eq!(
+        jwt_expiry(&jwt_with_claims(r#"{"sub":"user","exp":1800000000}"#)),
+        expected
+    );
+    assert_eq!(
+        jwt_expiry(&jwt_with_claims(r#"{"exp":1800000000.0}"#)),
+        expected
+    );
+}
+
+#[test]
+fn tokens_without_a_readable_expiry_report_none() {
+    assert_eq!(jwt_expiry(&jwt_with_claims(r#"{"sub":"user"}"#)), None);
+    assert_eq!(jwt_expiry(&jwt_with_claims(r#"{"exp":"soon"}"#)), None);
+    assert_eq!(jwt_expiry(&jwt_with_claims(r#"{"exp":-5}"#)), None);
+    // GitHub and session-cookie tokens are not JWTs.
+    assert_eq!(jwt_expiry("gho_16C7e42F292c6912E7710c838347Ae178B4a"), None);
+    assert_eq!(jwt_expiry("a.!!!.c"), None);
+    assert_eq!(jwt_expiry(""), None);
+}

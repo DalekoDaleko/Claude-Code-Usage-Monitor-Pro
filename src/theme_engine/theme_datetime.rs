@@ -102,6 +102,16 @@ pub(super) fn format_timestamp(unix: f64, format: &str, context: &DataContext) -
     Some(result.unwrap_or_else(|| "--".into()))
 }
 
+/// A moment as local short date and time in `locale`'s format, for display
+/// outside themes, such as the dashboard's About page.
+pub(crate) fn format_local_datetime(unix: f64, locale: &str) -> Option<String> {
+    let value = timestamp_system_time(unix, true)?;
+    combine(
+        date_default(&value, DATE_SHORTDATE, locale),
+        time_default(&value, TIME_NOSECONDS, locale),
+    )
+}
+
 fn is_timestamp_format(format: &str) -> bool {
     matches!(
         format,

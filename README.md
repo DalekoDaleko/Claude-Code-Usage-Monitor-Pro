@@ -300,6 +300,10 @@ application buttons and the "..." overflow button, making them unreachable.
   `VCRUNTIME140.dll`, which belongs to the Visual C++ Redistributable rather than to Windows. On a PC
   without that redistributable, the upstream build cannot start at all (`STATUS_DLL_NOT_FOUND`,
   `0xC0000135`); this build needs only DLLs that ship with Windows 10 and 11.
+- **About page in the dashboard.** Shows the version and copyright notices, and for each enabled
+  provider where its sign-in comes from (for example the Claude desktop app from the Microsoft Store,
+  an environment variable, or a CLI sign-in) and when its token expires, when the credential records
+  that. Everything is read from the PC without contacting the providers, and tokens are never shown.
 - **The dashboard draws with Direct3D 12.** Upstream used OpenGL, which depends on the graphics
   vendor's driver; in a virtual machine or a Remote Desktop session without GPU support Windows offers
   only OpenGL 1.1, and the dashboard failed with "egui_glow requires opengl 2.0+". Direct3D 12 works

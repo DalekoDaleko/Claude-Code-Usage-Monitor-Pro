@@ -2525,6 +2525,7 @@ mod theme_expression;
 pub use theme_expression::*;
 
 mod theme_datetime;
+pub(crate) use theme_datetime::format_local_datetime;
 use theme_datetime::*;
 fn schema_version() -> u32 {
     THEME_SCHEMA_VERSION

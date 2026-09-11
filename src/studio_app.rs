@@ -125,6 +125,8 @@ pub fn handle_cli_mode(args: &[String]) -> bool {
     };
     let initial_page = if args.iter().any(|argument| argument == "--theme-studio") {
         Page::Studio
+    } else if args.iter().any(|argument| argument == "--about") {
+        Page::About
     } else {
         Page::Settings
     };
@@ -171,6 +173,7 @@ enum Page {
     Studio,
     ContextMenus,
     Assets,
+    About,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -694,6 +697,7 @@ struct StudioApp {
     context_menu_selection: Option<Vec<usize>>,
     context_menu_action_helper: Option<ContextMenuActionHelperState>,
     delete_context_menu_confirmation: Option<(PathBuf, String)>,
+    about: studio_about::AboutState,
 }
 
 mod studio_assets;
@@ -1040,6 +1044,7 @@ mod studio_inspectors;
 use studio_inspectors::*;
 mod studio_utilities;
 use studio_utilities::*;
+mod studio_about;
 mod studio_renderer;
 #[cfg(test)]
 mod tests;

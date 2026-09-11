@@ -6,7 +6,7 @@ use std::time::UNIX_EPOCH;
 use serde::Deserialize;
 
 use super::windows_credentials;
-use super::{build_agent, parse_iso8601, PollError};
+use super::{base64_url_decode, build_agent, jwt_expiry, parse_iso8601, PollError, SignInReport};
 use crate::diagnose;
 use crate::models::{UsageData, UsageSection};
 use crate::winsqlite::ReadMode;
@@ -78,6 +78,26 @@ fn read_cursor_session_cookie() -> Option<String> {
     cursor_cookie_from_access_token(&access_token)
 }
 
+/// The sign-in `read_cursor_session_cookie` would use, and its token's expiry.
+pub(super) fn sign_in_report() -> Option<SignInReport> {
+    if let Some(token) = windows_credentials::protected_environment_value(CURSOR_SESSION_TOKEN_ENV)
+    {
+        let cookie = normalize_cursor_session_cookie(&token)?;
+        return Some(
+            SignInReport::new("Environment variable")
+                .detail(CURSOR_SESSION_TOKEN_ENV)
+                .expires_at(jwt_expiry(cookie_access_token(&cookie))),
+        );
+    }
+    let access_token = read_cursor_access_token_from_state_db()?;
+    Some(SignInReport::new("Cursor app sign-in").expires_at(jwt_expiry(&access_token)))
+}
+
+/// The access token inside a session cookie, `<user id>%3A%3A<token>`.
+fn cookie_access_token(cookie: &str) -> &str {
+    cookie.rsplit("%3A%3A").next().unwrap_or(cookie)
+}
+
 fn normalize_cursor_session_cookie(token: &str) -> Option<String> {
     if token.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
         return None;
@@ -114,33 +134,6 @@ fn extract_cursor_user_id(jwt: &str) -> Option<String> {
             .map(|(_, id)| id.to_string())
             .unwrap_or_else(|| subject.to_string()),
     )
-}
-
-fn base64_url_decode(input: &str) -> Option<Vec<u8>> {
-    if input.len() % 4 == 1 {
-        return None;
-    }
-    let mut output = Vec::with_capacity(input.len() * 3 / 4);
-    let mut buffer = 0u32;
-    let mut bits = 0u32;
-    for byte in input.bytes() {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'-' => 62,
-            b'_' => 63,
-            _ => return None,
-        } as u32;
-        buffer = (buffer << 6) | value;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            output.push(((buffer >> bits) & 0xff) as u8);
-        }
-    }
-    let padding_mask = (1u32 << bits).saturating_sub(1);
-    (buffer & padding_mask == 0).then_some(output)
 }
 
 fn cursor_state_db_path() -> Option<PathBuf> {
@@ -308,6 +301,15 @@ mod tests {
     fn rejects_malformed_base64_and_cookie_header_injection() {
         assert!(base64_url_decode("a").is_none());
         assert!(normalize_cursor_session_cookie("value\r\nInjected: yes").is_none());
+    }
+
+    #[test]
+    fn the_access_token_is_found_inside_a_session_cookie() {
+        assert_eq!(
+            cookie_access_token("user_01ABC%3A%3Aeyh.payload.sig"),
+            "eyh.payload.sig"
+        );
+        assert_eq!(cookie_access_token("eyh.payload.sig"), "eyh.payload.sig");
     }
 
     #[test]

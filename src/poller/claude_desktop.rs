@@ -95,6 +95,17 @@ fn is_store_package(name: &str) -> bool {
         })
 }
 
+/// Whether a desktop-app path lies inside a Microsoft Store package folder.
+pub(super) fn is_store_install(path: &Path) -> bool {
+    let names: Vec<String> = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    names
+        .windows(2)
+        .any(|pair| pair[0].eq_ignore_ascii_case("Packages") && is_store_package(&pair[1]))
+}
+
 /// Every place a desktop-app token cache may be, in [`data_directories`] order.
 pub(super) fn config_paths() -> Vec<PathBuf> {
     data_directories()
@@ -111,7 +122,8 @@ pub(super) fn read_token(config_path: &Path) -> Option<DesktopToken> {
     let config = match std::fs::read_to_string(config_path) {
         Ok(config) => config,
         Err(error) => {
-            if diagnose::is_enabled() {
+            // Both install layouts are checked, so one of them missing is normal.
+            if diagnose::is_enabled() && error.kind() != std::io::ErrorKind::NotFound {
                 diagnose::log_error(
                     &format!(
                         "unable to read Claude desktop config at {}",
@@ -606,6 +618,22 @@ mod tests {
         .iter()
         .any(|scope| *scope == INFERENCE_SCOPE || *scope == PROFILE_SCOPE));
         assert!(entry_scopes("").is_empty());
+    }
+
+    #[test]
+    fn store_install_paths_are_recognised() {
+        assert!(is_store_install(Path::new(
+            r"C:\Users\me\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\config.json"
+        )));
+        assert!(is_store_install(Path::new(
+            r"C:\Users\me\AppData\Local\packages\Claude_0123456789abc\LocalCache\Roaming\Claude\config.json"
+        )));
+        assert!(!is_store_install(Path::new(
+            r"C:\Users\me\AppData\Roaming\Claude\config.json"
+        )));
+        assert!(!is_store_install(Path::new(
+            r"C:\Users\me\AppData\Local\Packages\ClaudeHelper_pzs8sxrjxfjjc\config.json"
+        )));
     }
 
     #[test]

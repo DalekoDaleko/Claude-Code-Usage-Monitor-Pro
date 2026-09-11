@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 
 use super::windows_credentials;
-use super::{build_agent, PollError};
+use super::{build_agent, PollError, SignInReport};
 use crate::diagnose;
 use crate::models::{UsageData, UsageSection};
 
@@ -62,7 +62,39 @@ struct DashboardConfig {
 struct DashboardCredentials {
     workspace_id: String,
     auth_cookie: String,
-    source: String,
+    source: CredentialOrigin,
+}
+
+/// Where dashboard credentials were read from. Displays as before this was
+/// typed, so log lines and the credential-watch signature are unchanged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CredentialOrigin {
+    /// The workspace-id and auth-cookie environment variables.
+    Environment,
+    File(PathBuf),
+}
+
+impl std::fmt::Display for CredentialOrigin {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Environment => formatter.write_str("environment"),
+            Self::File(path) => write!(formatter, "{}", path.display()),
+        }
+    }
+}
+
+/// Where the dashboard credentials come from. A session cookie records no
+/// expiry that can be read here, so none is reported.
+pub(super) fn sign_in_report() -> Option<SignInReport> {
+    let credentials = read_dashboard_credentials()?;
+    Some(match credentials.source {
+        CredentialOrigin::Environment => {
+            SignInReport::new("Environment variable").detail(AUTH_COOKIE_ENV)
+        }
+        CredentialOrigin::File(path) => {
+            SignInReport::new("Config file").detail(path.display().to_string())
+        }
+    })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -159,7 +191,7 @@ fn read_dashboard_credentials() -> Option<DashboardCredentials> {
             return Some(DashboardCredentials {
                 workspace_id,
                 auth_cookie,
-                source: "environment".to_string(),
+                source: CredentialOrigin::Environment,
             });
         }
     }
@@ -193,7 +225,7 @@ fn read_dashboard_config(path: &Path, format: ConfigFormat) -> Option<DashboardC
     Some(DashboardCredentials {
         workspace_id,
         auth_cookie,
-        source: path.display().to_string(),
+        source: CredentialOrigin::File(path.to_path_buf()),
     })
 }
 
@@ -522,13 +554,15 @@ mod tests {
             windows_credentials::convert_from_secure_string("Fe26.2**sealed-cookie"),
         );
         let credentials = read_dashboard_credentials().expect("protected cookie is used");
-        assert_eq!(credentials.source, "environment");
+        assert_eq!(credentials.source, CredentialOrigin::Environment);
+        assert_eq!(credentials.source.to_string(), "environment");
         assert_eq!(credentials.workspace_id, "wrk_01TESTWORKSPACE");
         assert_eq!(credentials.auth_cookie, "Fe26.2**sealed-cookie");
 
         std::env::set_var(AUTH_COOKIE_ENV, "Fe26.2**sealed-cookie");
         assert!(
-            read_dashboard_credentials().map_or(true, |credentials| credentials.source != "environment"),
+            read_dashboard_credentials()
+                .is_none_or(|credentials| credentials.source != CredentialOrigin::Environment),
             "a plain-text cookie in the variable must never be used"
         );
 

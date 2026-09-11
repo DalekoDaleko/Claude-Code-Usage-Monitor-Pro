@@ -13,7 +13,7 @@ use windows::Win32::System::Registry::{
 use super::claude_desktop;
 use super::{
     build_agent, get_header_f64, get_header_i64, parse_iso8601, unix_to_system_time, HttpResponse,
-    PollError,
+    PollError, SignInReport,
 };
 use crate::diagnose;
 use crate::models::{CreditsSection, UsageData};
@@ -368,6 +368,35 @@ fn scan_sources(
         chosen: None,
         expired,
     }
+}
+
+/// The sign-in a poll would use now: the first unexpired token or, when every
+/// one has expired, the first found, so the About page can say so.
+pub(super) fn sign_in_report() -> Option<SignInReport> {
+    let scan = scan_sources(
+        credential_sources_in_order(),
+        read_credentials_from_source,
+        now_ms(),
+    );
+    let credentials = match scan.chosen {
+        Some(credentials) => credentials,
+        None => read_credentials_from_source(scan.expired.first()?)?,
+    };
+    let report = match &credentials.source {
+        CredentialSource::Windows(_) => SignInReport::new("Claude Code sign-in"),
+        CredentialSource::DesktopApp(path) if claude_desktop::is_store_install(path) => {
+            SignInReport::new("Claude desktop app (Microsoft Store)")
+        }
+        CredentialSource::DesktopApp(_) => SignInReport::new("Claude desktop app"),
+        CredentialSource::Wsl { distro } => {
+            SignInReport::new("Claude Code in WSL").detail(distro.clone())
+        }
+    };
+    let expires_at = credentials
+        .expires_at
+        .and_then(|milliseconds| u64::try_from(milliseconds).ok())
+        .and_then(|milliseconds| UNIX_EPOCH.checked_add(Duration::from_millis(milliseconds)));
+    Some(report.expires_at(expires_at))
 }
 
 /// Choose the token to poll with. A valid token from any source is used before

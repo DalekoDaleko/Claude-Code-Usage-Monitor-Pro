@@ -395,6 +395,7 @@ fn app_with_surfaces(surfaces: Vec<SceneObject>) -> StudioApp {
         context_menu_selection: None,
         context_menu_action_helper: None,
         delete_context_menu_confirmation: None,
+        about: Default::default(),
     }
 }
 

@@ -1,10 +1,11 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
-use super::{build_agent, parse_iso8601, PollError};
+use super::{build_agent, parse_iso8601, PollError, SignInReport};
 use crate::diagnose;
 use crate::models::{UsageData, UsageSection};
 
@@ -23,6 +24,30 @@ struct AntigravityAuthFile {
 #[derive(Deserialize)]
 struct AntigravityTokenData {
     access_token: String,
+    /// Google's OAuth libraries record the expiry as `expiry`, an RFC 3339
+    /// time (Go), or `expiry_date`, Unix milliseconds (Node). Shown on the
+    /// About page when present; neither is needed to poll.
+    #[serde(default)]
+    expiry: Option<String>,
+    #[serde(default)]
+    expiry_date: Option<f64>,
+}
+
+impl AntigravityTokenData {
+    fn expires_at(&self) -> Option<SystemTime> {
+        parse_iso8601(self.expiry.as_deref()).or_else(|| {
+            let milliseconds = self
+                .expiry_date
+                .filter(|value| value.is_finite() && *value > 0.0)?;
+            UNIX_EPOCH.checked_add(Duration::from_millis(milliseconds as u64))
+        })
+    }
+}
+
+/// The Antigravity sign-in kept in Windows Credential Manager.
+pub(super) fn sign_in_report() -> Option<SignInReport> {
+    let credentials = read_antigravity_credentials()?;
+    Some(SignInReport::new("Antigravity sign-in").expires_at(credentials.expires_at()))
 }
 
 #[derive(Deserialize)]
@@ -405,4 +430,33 @@ fn read_windows_generic_credential(target: &str) -> Option<String> {
         return None;
     };
     String::from_utf8(bytes).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn token(json: &str) -> AntigravityTokenData {
+        serde_json::from_str(json).expect("the fixture should deserialize")
+    }
+
+    #[test]
+    fn expiry_is_read_from_either_google_oauth_format() {
+        // Go's oauth2 writes RFC 3339 with nanoseconds and the local offset.
+        assert_eq!(
+            token(r#"{"access_token":"a","expiry":"2027-01-15T10:00:00.123456789+01:00"}"#)
+                .expires_at(),
+            parse_iso8601(Some("2027-01-15T09:00:00Z"))
+        );
+        // Node's google-auth-library writes Unix milliseconds.
+        assert_eq!(
+            token(r#"{"access_token":"a","expiry_date":1800000000000}"#).expires_at(),
+            UNIX_EPOCH.checked_add(Duration::from_secs(1_800_000_000))
+        );
+        assert_eq!(token(r#"{"access_token":"a"}"#).expires_at(), None);
+        assert_eq!(
+            token(r#"{"access_token":"a","expiry":"soon","expiry_date":-1}"#).expires_at(),
+            None
+        );
+    }
 }

@@ -27,7 +27,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::windows_credentials;
-use super::{build_agent, parse_iso8601, PollError};
+use super::{build_agent, parse_iso8601, PollError, SignInReport};
 use crate::diagnose;
 use crate::models::{UsageData, UsageSection};
 
@@ -70,6 +70,22 @@ impl TokenSource {
             Self::GitHubCli => read_token(GH_CLI_TARGET),
         }
     }
+}
+
+/// The first source holding a token, which is the one tried first. Whether
+/// GitHub accepts it is only known by asking, which this does not do, and
+/// GitHub's tokens record no expiry, so none is reported.
+pub(super) fn sign_in_report() -> Option<SignInReport> {
+    let source = TokenSource::ORDER
+        .into_iter()
+        .find(|source| source.read().is_some())?;
+    Some(match source {
+        TokenSource::Environment => {
+            SignInReport::new("Environment variable").detail(DPAPI_TOKEN_ENV)
+        }
+        TokenSource::CopilotCli => SignInReport::new("Copilot CLI sign-in"),
+        TokenSource::GitHubCli => SignInReport::new("GitHub CLI sign-in"),
+    })
 }
 
 pub(super) fn poll_copilot() -> Result<UsageData, PollError> {

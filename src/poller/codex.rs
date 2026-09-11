@@ -5,7 +5,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use serde::Deserialize;
 
-use super::{build_agent, unix_to_system_time, PollError};
+use super::{build_agent, unix_to_system_time, PollError, SignInReport};
 use crate::app_settings;
 use crate::diagnose;
 use crate::models::{CodexCreditsState, CreditsSection, UsageData, UsageSection};
@@ -271,6 +271,19 @@ pub(super) fn credential_watch_snapshot() -> Vec<String> {
         Err(_) => format!("{key}|missing"),
     };
     vec![signature]
+}
+
+/// The Codex CLI sign-in, with its access token's expiry.
+pub(super) fn sign_in_report() -> Option<SignInReport> {
+    let credentials = read_codex_credentials()?;
+    let report = SignInReport::new("Codex CLI sign-in")
+        .expires_at(super::jwt_expiry(&credentials.access_token));
+    // Name the file only when CODEX_HOME moved it from its usual place.
+    let moved = std::env::var_os("CODEX_HOME").and(codex_auth_path());
+    Some(match moved {
+        Some(path) => report.detail(path.display().to_string()),
+        None => report,
+    })
 }
 
 fn codex_auth_path() -> Option<PathBuf> {
