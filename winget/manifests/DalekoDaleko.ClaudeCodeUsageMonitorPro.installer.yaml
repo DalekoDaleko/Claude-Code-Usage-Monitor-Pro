@@ -9,6 +9,6 @@ ReleaseDate: 2026-09-11
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/download/v2.12.0/claude-code-usage-monitor-pro.exe
-    InstallerSha256: 32DB9BBEA966655F5C091F0A126D072EA31BE272441679497FAA66DB4C09BB5E
+    InstallerSha256: 72C0CBB2FABCEAC896D105F49763465603F687E986B27F993F274BD714F88CAD
 ManifestType: installer
 ManifestVersion: 1.6.0
