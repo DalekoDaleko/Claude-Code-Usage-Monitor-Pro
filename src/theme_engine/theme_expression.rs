@@ -498,11 +498,11 @@ pub(super) fn format_usage_line(base: &str, context: &DataContext) -> Option<Str
         Some("display") => "display",
         Some(_) => return None,
     };
+    // Resolved through the registry rather than a list of names, so a newly
+    // registered provider formats like the rest instead of silently falling
+    // through to the unformatted placeholder.
     if parts.next().is_some()
-        || !matches!(
-            provider,
-            "active" | "claude" | "codex" | "antigravity" | "opencode" | "cursor"
-        )
+        || !(provider == "active" || crate::providers::ProviderId::from_key(provider).is_some())
         || !matches!(
             window,
             "session" | "five_hour" | "weekly" | "monthly" | "credits"

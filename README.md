@@ -3,7 +3,7 @@
 ![Windows](https://img.shields.io/badge/platform-Windows-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A lightweight, open-source Windows taskbar widget for monitoring Claude Code usage limits and reset times. It can also display usage for Codex, Google Antigravity, OpenCode Go, and Cursor.
+A lightweight, open-source Windows taskbar widget for monitoring Claude Code usage limits and reset times. It can also display usage for Codex, Google Antigravity, OpenCode Go, Cursor, and GitHub Copilot.
 
 > **This is an unofficial fork.** The original **Claude Code Usage Monitor** is created and
 > maintained by **Craig Constable** ([Code Zeno Pty Ltd](https://codezeno.com.au)) at
@@ -18,7 +18,7 @@ A lightweight, open-source Windows taskbar widget for monitoring Claude Code usa
 
 - Displays current usage and time remaining until each limit resets
 - Counts usage up from zero or down from the full allowance, whichever you prefer
-- Supports Claude Code, Codex, Google Antigravity, OpenCode Go, and Cursor
+- Supports Claude Code, Codex, Google Antigravity, OpenCode Go, Cursor, and GitHub Copilot
 - Lives in the Windows taskbar with quick controls in the system tray
 - Supports multiple monitors and Windows startup
 - Includes configurable refresh intervals, providers, languages, and updates
@@ -74,6 +74,7 @@ In the default theme, left-click a provider tray icon to show or hide the widget
 | Google Antigravity | Sign in to Antigravity, then enable it in **Providers**. |
 | OpenCode Go | Connect an OpenCode Go account, configure the credentials described below, then enable OpenCode in **Providers**. |
 | Cursor | Sign in to Cursor, then enable it in **Providers**. The local session is detected automatically. |
+| GitHub Copilot | Sign in with the GitHub Copilot CLI, or run `gh auth login`, then enable GitHub Copilot in **Providers**. The widget shows the premium requests used this month. To use a separate token, see below. |
 
 For OpenCode Go, set `OPENCODE_GO_WORKSPACE_ID` and `OPENCODE_GO_AUTH_COOKIE`, or create `%APPDATA%\opencode-go\config.json`:
 
@@ -87,6 +88,24 @@ For OpenCode Go, set `OPENCODE_GO_WORKSPACE_ID` and `OPENCODE_GO_AUTH_COOKIE`, o
 The workspace ID is part of the OpenCode Go workspace URL. The auth cookie comes from an authenticated `opencode.ai` browser session. Set `OPENCODE_GO_CONFIG_FILE` to use a different config path.
 
 For Cursor, `CURSOR_SESSION_TOKEN` can override the automatically detected local session.
+
+For GitHub Copilot, the token is read from the GitHub Copilot CLI's sign-in, or failing that the
+GitHub CLI's, both kept encrypted in Windows Credential Manager. To give the monitor a token of its
+own instead, store it **encrypted** in `CLAUDECODEUSAGE_COPILOT_GITHUB_TOKEN_DPAPI`. The command
+prompts for the token without echoing it and never places it on a command line:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+    'CLAUDECODEUSAGE_COPILOT_GITHUB_TOKEN_DPAPI',
+    (Read-Host -AsSecureString 'GitHub token' | ConvertFrom-SecureString),
+    'User')
+```
+
+Restart the monitor afterwards; a running program never sees a changed environment variable.
+`ConvertFrom-SecureString` encrypts with DPAPI for your Windows account, so the value only decrypts
+for that account on that PC, and a copy that leaks elsewhere is useless. It does not protect against
+programs running as you, which is equally true of the Credential Manager sign-ins. A plain-text token
+placed in the variable is refused and never used; the log names only its kind, such as `gho_…`.
 
 ## Data and privacy
 
@@ -167,6 +186,27 @@ application buttons and the "..." overflow button, making them unreachable.
 - When a poll fails while figures are still on screen, the widget now renders in greyscale rather
   than continuing to look live. Upstream showed a single tray balloon and then left the last known
   numbers on screen indefinitely with no visual indication they had stopped updating.
+
+### GitHub Copilot provider
+
+- Shows GitHub Copilot's monthly premium-request allowance: one bar for the share used and the time
+  until it resets. The second row is reserved and always drawn empty.
+- Reads `api.github.com/copilot_internal/user`, the endpoint VS Code queries for its own Copilot
+  quota display (the `entitlementUrl` in VS Code's `product.json`). It is not a documented public
+  API, so every field is treated as optional. The percentage follows VS Code's own derivation, so the
+  widget agrees with the editor. Reading it does not consume any quota.
+- Every token source is DPAPI-protected: an optional `CLAUDECODEUSAGE_COPILOT_GITHUB_TOKEN_DPAPI`
+  variable holding `ConvertFrom-SecureString` output, then the GitHub Copilot CLI's sign-in, then the
+  GitHub CLI's, both from Windows Credential Manager. A plain-text token in the variable is refused.
+  The token is sent only to `api.github.com`. Both CLI sign-ins carry broad repository permissions;
+  the monitor only makes one read-only request with them. If GitHub rejects one source's token, the
+  next source is tried.
+- The Credential Manager reader and the DPAPI decryption, previously private to the Antigravity and
+  Claude desktop readers, are shared so all three decode through the same tested code. The Copilot
+  CLI's settings file carries `//` comments, which strict JSON rejects; they are stripped before
+  parsing, or that sign-in would be skipped.
+- Fixed `usage_line` formatting keeping its own list of provider names, which made any provider
+  missing from that list render as `--`. It now resolves providers through the registry.
 
 ### Security
 

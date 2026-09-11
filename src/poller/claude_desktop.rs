@@ -186,12 +186,6 @@ fn wide(value: &str) -> Vec<u16> {
 }
 
 #[repr(C)]
-struct CryptIntegerBlob {
-    cb_data: u32,
-    pb_data: *mut u8,
-}
-
-#[repr(C)]
 struct AuthenticatedCipherModeInfo {
     cb_size: u32,
     dw_info_version: u32,
@@ -206,23 +200,6 @@ struct AuthenticatedCipherModeInfo {
     cb_aad: u32,
     cb_data: u64,
     dw_flags: u32,
-}
-
-#[link(name = "crypt32")]
-extern "system" {
-    fn CryptUnprotectData(
-        data_in: *const CryptIntegerBlob,
-        data_description: *mut *mut u16,
-        optional_entropy: *const CryptIntegerBlob,
-        reserved: *mut c_void,
-        prompt_struct: *mut c_void,
-        flags: u32,
-        data_out: *mut CryptIntegerBlob,
-    ) -> i32;
-}
-
-extern "system" {
-    fn LocalFree(mem: *mut c_void) -> *mut c_void;
 }
 
 #[link(name = "bcrypt")]
@@ -274,37 +251,11 @@ extern "system" {
 }
 
 fn dpapi_unprotect(data: &[u8]) -> Option<Vec<u8>> {
-    let input = CryptIntegerBlob {
-        cb_data: u32::try_from(data.len()).ok()?,
-        pb_data: data.as_ptr() as *mut u8,
-    };
-    let mut output = CryptIntegerBlob {
-        cb_data: 0,
-        pb_data: std::ptr::null_mut(),
-    };
-
-    let ok = unsafe {
-        CryptUnprotectData(
-            &input,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            0,
-            &mut output,
-        )
-    };
-
-    if ok == 0 || output.pb_data.is_null() {
+    let key = super::windows_credentials::dpapi_unprotect(data);
+    if key.is_none() {
         diagnose::log("unable to unwrap the Claude desktop OSCrypt key with DPAPI");
-        return None;
     }
-
-    Some(unsafe {
-        let key = std::slice::from_raw_parts(output.pb_data, output.cb_data as usize).to_vec();
-        LocalFree(output.pb_data as *mut c_void);
-        key
-    })
+    key
 }
 
 fn aes_gcm_decrypt(key: &[u8], nonce: &[u8], ciphertext: &[u8], tag: &[u8]) -> Option<Vec<u8>> {

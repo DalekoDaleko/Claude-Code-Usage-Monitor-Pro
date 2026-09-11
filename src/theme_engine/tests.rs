@@ -535,6 +535,34 @@ fn usage_lines_handle_loading_errors_missing_resets_and_language() {
 }
 
 #[test]
+fn every_registered_provider_formats_a_usage_line() {
+    // format_usage_line once kept its own list of provider names, so a newly
+    // registered provider rendered "--" in the widget instead of its figures.
+    let canvas = Canvas::default();
+    for descriptor in crate::providers::PROVIDER_DESCRIPTORS {
+        let usage = AppUsageData::from_iter([(
+            descriptor.id,
+            crate::models::UsageData {
+                session: crate::models::UsageSection {
+                    percentage: 25.0,
+                    resets_at: None,
+                },
+                ..Default::default()
+            },
+        )]);
+        let context = DataContext::from_usage_with_runtime(
+            Some(&usage),
+            &canvas,
+            ThemeRuntime::from_providers(ProviderSet::from_enabled([descriptor.id])),
+        );
+        for template in ["{KEY.session:usage_line}", "{KEY.session.display:usage_line}"] {
+            let template = template.replace("KEY", descriptor.key);
+            assert_eq!(format_template(&template, &context), "25%", "{template}");
+        }
+    }
+}
+
+#[test]
 fn built_in_classic_uses_149_geometry() {
     let theme = ThemeDocument::starter();
     assert_eq!(theme.id, CLASSIC_THEME_ID);
@@ -566,9 +594,10 @@ fn starter_theme_round_trips_and_validates() {
         .collect::<Vec<_>>();
     // Classic contains separate light and dark progress layers so the
     // 1.4.9 palette follows the taskbar mode without runtime recolouring:
-    // five providers over two windows in two modes, plus a credit overlay on
-    // the weekly row of the two providers that report credits.
-    assert_eq!(segments, vec![10; 5 * 2 * 2 + 2 * 2]);
+    // six providers over two windows in two modes (Copilot's second window is
+    // a reserved, always-empty row), plus a credit overlay on the weekly row
+    // of the two providers that report credits.
+    assert_eq!(segments, vec![10; 6 * 2 * 2 + 2 * 2]);
     assert!(theme.surfaces[0]
         .children
         .iter()
@@ -1109,9 +1138,15 @@ fn starter_adapts_width_segments_and_collapsed_provider_rows() {
             245,
             10,
         ),
+        // Copilot, like Cursor, prefixes its value with a category label.
+        (
+            ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Copilot])),
+            245,
+            10,
+        ),
         (
             ThemeRuntime::from_providers(ProviderSet::from_enabled(ProviderId::ALL)),
-            545,
+            663,
             2,
         ),
     ] {
@@ -1187,7 +1222,8 @@ fn starter_has_a_taskbar_widget_and_provider_tray_icons() {
         theme.surfaces[0].placement.reference.region,
         ReferenceRegion::SystemTray
     );
-    assert_eq!(theme.surfaces.len(), 6);
+    // The taskbar widget plus one tray icon per provider.
+    assert_eq!(theme.surfaces.len(), 1 + ProviderId::ALL.len());
     assert!(theme.surfaces[1..]
         .iter()
         .all(|surface| surface.placement.nest == SurfaceNest::TrayIcon));

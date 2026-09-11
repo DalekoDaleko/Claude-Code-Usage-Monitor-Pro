@@ -89,6 +89,10 @@ impl LanguageId {
                 strings.cursor_token_expired_title,
                 strings.cursor_token_expired_body,
             ),
+            ProviderId::Copilot => (
+                strings.copilot_token_expired_title,
+                strings.copilot_token_expired_body,
+            ),
         }
     }
 
@@ -156,6 +160,7 @@ pub struct Strings {
     pub weekly_window: &'static str,
     pub cursor_auto_window: &'static str,
     pub cursor_api_window: &'static str,
+    pub copilot_premium_window: &'static str,
     pub now: &'static str,
     pub day_suffix: &'static str,
     pub hour_suffix: &'static str,
@@ -171,6 +176,8 @@ pub struct Strings {
     pub opencode_token_expired_body: &'static str,
     pub cursor_token_expired_title: &'static str,
     pub cursor_token_expired_body: &'static str,
+    pub copilot_token_expired_title: &'static str,
+    pub copilot_token_expired_body: &'static str,
     pub codex_window_title: &'static str,
     pub antigravity_window_title: &'static str,
     pub opencode_window_title: &'static str,

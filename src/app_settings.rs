@@ -54,6 +54,8 @@ pub struct SettingsFile {
     show_opencode: bool,
     #[serde(default)]
     show_cursor: bool,
+    #[serde(default)]
+    show_copilot: bool,
     #[serde(default = "default_true")]
     pub custom_theme_enabled: bool,
     /// Show what is left of each allowance instead of what has been spent, so
@@ -97,6 +99,7 @@ impl Default for SettingsFile {
             show_antigravity: false,
             show_opencode: false,
             show_cursor: false,
+            show_copilot: false,
             custom_theme_enabled: true,
             usage_countdown: false,
             active_theme_path: None,
@@ -175,6 +178,7 @@ impl SettingsFile {
             ProviderId::Antigravity => self.show_antigravity,
             ProviderId::OpenCode => self.show_opencode,
             ProviderId::Cursor => self.show_cursor,
+            ProviderId::Copilot => self.show_copilot,
         }
     }
 
@@ -185,6 +189,7 @@ impl SettingsFile {
             ProviderId::Antigravity => self.show_antigravity = enabled,
             ProviderId::OpenCode => self.show_opencode = enabled,
             ProviderId::Cursor => self.show_cursor = enabled,
+            ProviderId::Copilot => self.show_copilot = enabled,
         }
     }
 
