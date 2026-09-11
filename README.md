@@ -76,42 +76,91 @@ In the default theme, left-click a provider tray icon to show or hide the widget
 | Cursor | Sign in to Cursor, then enable it in **Providers**. The local session is detected automatically. |
 | GitHub Copilot | Sign in with the GitHub Copilot CLI, or run `gh auth login`, then enable GitHub Copilot in **Providers**. The widget shows the premium requests used this month. To use a separate token, see below. |
 
-For OpenCode Go, set `OPENCODE_GO_WORKSPACE_ID` and `OPENCODE_GO_AUTH_COOKIE`, or create `%APPDATA%\opencode-go\config.json`:
+For OpenCode Go, set `CLAUDECODEUSAGE_OPENCODE_GO_WORKSPACE_ID` to the workspace ID and
+`CLAUDECODEUSAGE_OPENCODE_GO_AUTH_COOKIE` to the **encrypted** session cookie (see
+[Secrets in environment variables](#secrets-in-environment-variables)), or create
+`%APPDATA%\opencode-go\config.json`, in which the cookie is stored **encrypted** as
+`encryptedAuthCookie`:
 
 ```json
 {
   "workspaceId": "wrk_01...",
-  "authCookie": "your-opencode-auth-cookie"
+  "encryptedAuthCookie": "01000000d08c9ddf0115d1118c7a00c04fc297eb..."
 }
 ```
 
-The workspace ID is part of the OpenCode Go workspace URL. The auth cookie comes from an authenticated `opencode.ai` browser session. Set `OPENCODE_GO_CONFIG_FILE` to use a different config path.
+This creates that file, prompting for the cookie without echoing it:
 
-For Cursor, `CURSOR_SESSION_TOKEN` can override the automatically detected local session.
+```powershell
+$cookie = Read-Host -AsSecureString 'OpenCode auth cookie' | ConvertFrom-SecureString
+New-Item -ItemType Directory -Force "$env:APPDATA\opencode-go" | Out-Null
+[ordered]@{ workspaceId = 'wrk_01...'; encryptedAuthCookie = $cookie } |
+    ConvertTo-Json | Set-Content "$env:APPDATA\opencode-go\config.json" -Encoding utf8
+```
+
+A plain-text `authCookie` in this file is refused and never used; the diagnostic log names the file
+and the reason, never the value.
+
+The workspace ID is part of the OpenCode Go workspace URL. It is not a secret, so its variable holds
+plain text:
+
+```powershell
+[Environment]::SetEnvironmentVariable('CLAUDECODEUSAGE_OPENCODE_GO_WORKSPACE_ID', 'wrk_01...', 'User')
+```
+
+The auth cookie comes from an authenticated `opencode.ai` browser session. Set
+`CLAUDECODEUSAGE_OPENCODE_GO_CONFIG_FILE` to keep this config file somewhere else; a file named there
+uses the same encrypted format.
+
+If you already use opencode-bar or opencode-quota, the
+monitor also reuses the sign-in from their `opencode-go.json` in `~/.config/opencode-bar` or
+`~/.config/opencode-quota`. Those files belong to those tools and store the cookie in their own
+plain-text format, which the monitor reads as-is.
+
+For Cursor, an **encrypted** `CLAUDECODEUSAGE_CURSOR_SESSION_TOKEN` can override the automatically
+detected local session.
 
 For GitHub Copilot, the token is read from the GitHub Copilot CLI's sign-in, or failing that the
 GitHub CLI's, both kept encrypted in Windows Credential Manager. To give the monitor a token of its
-own instead, store it **encrypted** in `CLAUDECODEUSAGE_COPILOT_GITHUB_TOKEN_DPAPI`. The command
-prompts for the token without echoing it and never places it on a command line:
+own instead, store it **encrypted** in `CLAUDECODEUSAGE_COPILOT_GITHUB_TOKEN_DPAPI`. If a plain-text
+token is placed there, the log names only its kind, such as `gho_…`.
+
+### Secrets in environment variables
+
+A variable that carries a secret must hold the output of PowerShell's `ConvertFrom-SecureString`,
+never the secret itself:
+
+| Variable | Holds |
+| --- | --- |
+| `CLAUDECODEUSAGE_OPENCODE_GO_AUTH_COOKIE` | OpenCode Go session cookie |
+| `CLAUDECODEUSAGE_CURSOR_SESSION_TOKEN` | Cursor session token |
+| `CLAUDECODEUSAGE_COPILOT_GITHUB_TOKEN_DPAPI` | GitHub token for Copilot |
+
+This command stores one, changing the variable name as needed. It prompts for the secret without
+echoing it and never places it on a command line:
 
 ```powershell
 [Environment]::SetEnvironmentVariable(
-    'CLAUDECODEUSAGE_COPILOT_GITHUB_TOKEN_DPAPI',
-    (Read-Host -AsSecureString 'GitHub token' | ConvertFrom-SecureString),
+    'CLAUDECODEUSAGE_CURSOR_SESSION_TOKEN',
+    (Read-Host -AsSecureString 'Secret' | ConvertFrom-SecureString),
     'User')
 ```
 
 Restart the monitor afterwards; a running program never sees a changed environment variable.
 `ConvertFrom-SecureString` encrypts with DPAPI for your Windows account, so the value only decrypts
 for that account on that PC, and a copy that leaks elsewhere is useless. It does not protect against
-programs running as you, which is equally true of the Credential Manager sign-ins. A plain-text token
-placed in the variable is refused and never used; the log names only its kind, such as `gho_…`.
+programs running as you, which is equally true of the provider sign-ins the monitor reads. A value
+that is not encrypted this way is refused and never used; the diagnostic log names the variable and
+the reason, never the value.
+
+The upstream names `OPENCODE_GO_WORKSPACE_ID`, `OPENCODE_GO_AUTH_COOKIE`, `OPENCODE_GO_CONFIG_FILE`
+and `CURSOR_SESSION_TOKEN` are no longer read. If one is still set, the diagnostic log says which variable replaces it.
 
 ## Data and privacy
 
 The monitor reads local sign-in credentials for enabled providers and sends usage requests directly to their official services. It has no backend service, collects no telemetry, and does not upload credentials or project files.
 
-Credentials are read without modifying the provider files that contain them. OpenCode Go credentials saved in a JSON configuration file are plain text and should be protected like a browser session cookie.
+Credentials are read without modifying the provider files that contain them. Secrets that this monitor itself reads from environment variables or from its own OpenCode Go configuration file must be encrypted with DPAPI; see [Secrets in environment variables](#secrets-in-environment-variables). Sign-ins reused from other tools are read in whatever form those tools store them.
 
 ## Troubleshooting
 
@@ -210,6 +259,21 @@ application buttons and the "..." overflow button, making them unreachable.
 
 ### Security
 
+- **Encrypted secrets in environment variables.** The OpenCode Go session cookie and the Cursor
+  session token, which upstream read from environment variables in plain text, must now be
+  DPAPI-encrypted with `ConvertFrom-SecureString`, as the Copilot token is; a plain-text value is
+  refused and never used. The variables gained a `CLAUDECODEUSAGE_` prefix
+  (`OPENCODE_GO_WORKSPACE_ID`, `OPENCODE_GO_AUTH_COOKIE` and `CURSOR_SESSION_TOKEN` become
+  `CLAUDECODEUSAGE_OPENCODE_GO_WORKSPACE_ID`, `CLAUDECODEUSAGE_OPENCODE_GO_AUTH_COOKIE` and
+  `CLAUDECODEUSAGE_CURSOR_SESSION_TOKEN`). The old names are no longer read, and if one is set the
+  log names its replacement. The workspace ID is not a secret and stays plain text. All three
+  providers decrypt through one shared, tested routine.
+- **Encrypted OpenCode Go config file.** In the monitor's own `%APPDATA%\opencode-go\config.json`,
+  and any file named by `CLAUDECODEUSAGE_OPENCODE_GO_CONFIG_FILE` (formerly
+  `OPENCODE_GO_CONFIG_FILE`), the cookie moved from a plain-text `authCookie` to a DPAPI-encrypted
+  `encryptedAuthCookie`; a plain `authCookie` there is refused. Files written by opencode-bar and
+  opencode-quota are still read in those tools' own format. A UTF-8 byte-order mark, which Windows
+  PowerShell 5.1 writes, no longer causes the file to be skipped silently.
 - **Removed the portable self-update mechanism.** Upstream downloaded a replacement executable over
   HTTPS and swapped the running binary with no code-signature or hash verification. WinGet installs
   still update in place, because WinGet verifies its own packages; portable builds are pointed at the

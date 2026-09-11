@@ -36,13 +36,6 @@ const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VE
 
 /// Optional token override. Must hold DPAPI-protected data, never a token.
 const DPAPI_TOKEN_ENV: &str = "CLAUDECODEUSAGE_COPILOT_GITHUB_TOKEN_DPAPI";
-/// Every DPAPI blob starts with a version of 1 followed by the DPAPI provider
-/// GUID {df9d8cd0-1501-11d1-8c7a-00c04fc297eb}.
-const DPAPI_BLOB_HEADER: [u8; 20] = [
-    0x01, 0x00, 0x00, 0x00, 0xd0, 0x8c, 0x9d, 0xdf, 0x01, 0x15, 0xd1, 0x11, 0x8c, 0x7a, 0x00,
-    0xc0, 0x4f, 0xc2, 0x97, 0xeb,
-];
-
 /// The GitHub CLI keeps the active account's token under this target.
 const GH_CLI_TARGET: &str = "gh:github.com:";
 /// The Copilot CLI names its entry `<host>:<login>.copilot-cli`, with the
@@ -261,40 +254,27 @@ fn environment_token() -> Option<String> {
 /// The reason returned on failure is written to the log, so it must never
 /// contain the value itself.
 fn decode_protected_token(value: &str) -> Result<String, String> {
-    let Some(blob) = decode_hex(value) else {
-        // GitHub's token prefixes: OAuth, classic PAT, user-to-server,
-        // server-to-server, refresh, and fine-grained PAT. Naming the prefix
-        // tells the user which kind of token they pasted; it is the same for
-        // every token of that kind, so it reveals nothing secret.
-        let prefix = ["gho_", "ghp_", "ghu_", "ghs_", "ghr_", "github_pat_"]
-            .into_iter()
-            .find(|prefix| value.starts_with(prefix));
-        return Err(match prefix {
-            Some(prefix) => format!(
-                "it holds a plain-text {prefix}… token, which is never used; store the output \
-                 of ConvertFrom-SecureString instead"
-            ),
-            None => "it is not the hexadecimal output of ConvertFrom-SecureString".into(),
-        });
+    let text = match windows_credentials::decrypt_secure_string(value) {
+        Ok(text) => text,
+        Err(windows_credentials::SecureStringError::NotHex) => {
+            // GitHub's token prefixes: OAuth, classic PAT, user-to-server,
+            // server-to-server, refresh, and fine-grained PAT. Naming the
+            // prefix tells the user which kind of token they pasted; it is the
+            // same for every token of that kind, so it reveals nothing secret.
+            let prefix = ["gho_", "ghp_", "ghu_", "ghs_", "ghr_", "github_pat_"]
+                .into_iter()
+                .find(|prefix| value.starts_with(prefix));
+            return Err(match prefix {
+                Some(prefix) => format!(
+                    "it holds a plain-text {prefix}… token, which is never used; store the \
+                     output of ConvertFrom-SecureString instead"
+                ),
+                None => windows_credentials::SecureStringError::NotHex.reason().to_string(),
+            });
+        }
+        Err(error) => return Err(error.reason().to_string()),
     };
-    if !blob.starts_with(&DPAPI_BLOB_HEADER) {
-        return Err("it is not DPAPI-protected data".into());
-    }
-    let plain = windows_credentials::dpapi_unprotect(&blob).ok_or_else(|| {
-        "it could not be decrypted; it must be created by this Windows account on this PC"
-            .to_string()
-    })?;
-    decode_token(&plain).ok_or_else(|| "it did not decrypt to a token".to_string())
-}
-
-fn decode_hex(value: &str) -> Option<Vec<u8>> {
-    if value.is_empty() || value.len() % 2 != 0 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    (0..value.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&value[index..index + 2], 16).ok())
-        .collect()
+    decode_token(text.as_bytes()).ok_or_else(|| "it did not decrypt to a token".to_string())
 }
 
 fn read_token(target: &str) -> Option<String> {
@@ -636,21 +616,10 @@ mod tests {
         assert_eq!(decode_token(b"gho_x\n").as_deref(), Some("gho_x"));
     }
 
-    /// Build a value exactly as `ConvertFrom-SecureString` would: UTF-16 text,
-    /// protected for this account, written as lowercase hexadecimal.
-    fn convert_from_secure_string(text: &str) -> String {
-        let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        windows_credentials::dpapi_protect(&utf16)
-            .expect("DPAPI protect")
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
-    }
-
     #[test]
     fn a_convert_from_secure_string_value_decrypts_to_the_token() {
         let token = "gho_abcdefghijklmnopqrstuvwxyz0123456789";
-        let protected = convert_from_secure_string(token);
+        let protected = windows_credentials::convert_from_secure_string(token);
         assert!(protected.starts_with("01000000d08c9ddf0115d1118c7a00c04fc297eb"));
         assert_eq!(decode_protected_token(&protected).as_deref(), Ok(token));
         assert_eq!(

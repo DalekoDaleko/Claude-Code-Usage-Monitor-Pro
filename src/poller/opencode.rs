@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
+use super::windows_credentials;
 use super::{build_agent, PollError};
 use crate::diagnose;
 use crate::models::{UsageData, UsageSection};
@@ -13,10 +14,43 @@ const DASHBOARD_URL_PREFIX: &str = "https://opencode.ai/workspace/";
 const DASHBOARD_URL_SUFFIX: &str = "/go";
 const DASHBOARD_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
-const WORKSPACE_ID_ENV: &str = "OPENCODE_GO_WORKSPACE_ID";
-const AUTH_COOKIE_ENV: &str = "OPENCODE_GO_AUTH_COOKIE";
-const CONFIG_FILE_ENV: &str = "OPENCODE_GO_CONFIG_FILE";
+/// The workspace ID is part of the dashboard URL, not a secret, so it is
+/// read as plain text.
+const WORKSPACE_ID_ENV: &str = "CLAUDECODEUSAGE_OPENCODE_GO_WORKSPACE_ID";
+/// The session cookie is a secret. It must hold the output of
+/// `ConvertFrom-SecureString`; a plain-text cookie is refused, never used.
+const AUTH_COOKIE_ENV: &str = "CLAUDECODEUSAGE_OPENCODE_GO_AUTH_COOKIE";
+/// The upstream names, the second of which held the cookie in plain text.
+const RETIRED_WORKSPACE_ID_ENV: &str = "OPENCODE_GO_WORKSPACE_ID";
+const RETIRED_AUTH_COOKIE_ENV: &str = "OPENCODE_GO_AUTH_COOKIE";
+/// A path to this monitor's own config file, read in the encrypted format.
+const CONFIG_FILE_ENV: &str = "CLAUDECODEUSAGE_OPENCODE_GO_CONFIG_FILE";
+const RETIRED_CONFIG_FILE_ENV: &str = "OPENCODE_GO_CONFIG_FILE";
 
+/// Whose format a config file is written in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfigFormat {
+    /// This monitor's own file. The cookie must be DPAPI-protected, in
+    /// `encryptedAuthCookie`; a plain-text `authCookie` is refused.
+    Own,
+    /// A file written by another tool (opencode-bar, opencode-quota), read in
+    /// that tool's own plain-text format so an existing sign-in can be reused.
+    OtherTool,
+}
+
+/// This monitor's own config file.
+#[derive(Deserialize)]
+struct OwnDashboardConfig {
+    #[serde(alias = "workspaceId", alias = "workspaceID")]
+    workspace_id: String,
+    #[serde(default, alias = "encryptedAuthCookie")]
+    encrypted_auth_cookie: Option<String>,
+    /// Read only to recognise a plain-text cookie and explain why it is refused.
+    #[serde(default, alias = "authCookie", alias = "cookie")]
+    auth_cookie: Option<String>,
+}
+
+/// The format written by the other tools whose sign-in can be reused.
 #[derive(Deserialize)]
 struct DashboardConfig {
     #[serde(alias = "workspaceId", alias = "workspaceID")]
@@ -115,9 +149,11 @@ fn section_from_window(window: &UsageWindow, now: SystemTime) -> UsageSection {
 }
 
 fn read_dashboard_credentials() -> Option<DashboardCredentials> {
+    windows_credentials::note_retired_variable(RETIRED_WORKSPACE_ID_ENV, WORKSPACE_ID_ENV);
+    windows_credentials::note_retired_variable(RETIRED_AUTH_COOKIE_ENV, AUTH_COOKIE_ENV);
     if let (Some(workspace_id), Some(auth_cookie)) = (
         non_empty_environment(WORKSPACE_ID_ENV),
-        non_empty_environment(AUTH_COOKIE_ENV),
+        windows_credentials::protected_environment_value(AUTH_COOKIE_ENV),
     ) {
         if valid_workspace_id(&workspace_id) && valid_cookie(&auth_cookie) {
             return Some(DashboardCredentials {
@@ -130,14 +166,27 @@ fn read_dashboard_credentials() -> Option<DashboardCredentials> {
 
     dashboard_config_paths()
         .into_iter()
-        .find_map(|path| read_dashboard_config(&path))
+        .find_map(|(path, format)| read_dashboard_config(&path, format))
 }
 
-fn read_dashboard_config(path: &Path) -> Option<DashboardCredentials> {
+fn read_dashboard_config(path: &Path, format: ConfigFormat) -> Option<DashboardCredentials> {
     let content = std::fs::read_to_string(path).ok()?;
-    let config: DashboardConfig = serde_json::from_str(&content).ok()?;
-    let workspace_id = config.workspace_id.trim().to_string();
-    let auth_cookie = config.auth_cookie.trim().to_string();
+    // Windows PowerShell 5.1 writes UTF-8 files with a byte-order mark, which
+    // strict JSON rejects; the file would otherwise be skipped without a word.
+    let content = content.trim_start_matches('\u{feff}');
+    let (workspace_id, auth_cookie) = match format {
+        ConfigFormat::Own => {
+            let config: OwnDashboardConfig = serde_json::from_str(content).ok()?;
+            let cookie = own_config_cookie(path, &config)?;
+            (config.workspace_id, cookie)
+        }
+        ConfigFormat::OtherTool => {
+            let config: DashboardConfig = serde_json::from_str(content).ok()?;
+            (config.workspace_id, config.auth_cookie)
+        }
+    };
+    let workspace_id = workspace_id.trim().to_string();
+    let auth_cookie = auth_cookie.trim().to_string();
     if !valid_workspace_id(&workspace_id) || !valid_cookie(&auth_cookie) {
         return None;
     }
@@ -146,6 +195,43 @@ fn read_dashboard_config(path: &Path) -> Option<DashboardCredentials> {
         auth_cookie,
         source: path.display().to_string(),
     })
+}
+
+/// The cookie from this monitor's own config file, decrypted. A plain-text
+/// cookie is refused; the log names the file and the reason, never the value.
+fn own_config_cookie(path: &Path, config: &OwnDashboardConfig) -> Option<String> {
+    let file = path.display().to_string();
+    let present = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    match present(&config.encrypted_auth_cookie) {
+        Some(protected) => match windows_credentials::decrypt_secure_string(&protected) {
+            Ok(cookie) => Some(cookie),
+            Err(error) => {
+                windows_credentials::log_once(
+                    &file,
+                    format!("{file}: encryptedAuthCookie ignored: {}", error.reason()),
+                );
+                None
+            }
+        },
+        None => {
+            if present(&config.auth_cookie).is_some() {
+                windows_credentials::log_once(
+                    &file,
+                    format!(
+                        "{file}: authCookie holds a plain-text cookie, which is never used; store \
+                         the output of ConvertFrom-SecureString in encryptedAuthCookie instead"
+                    ),
+                );
+            }
+            None
+        }
+    }
 }
 
 fn fetch_dashboard_usage(credentials: &DashboardCredentials) -> Result<DashboardUsage, PollError> {
@@ -271,29 +357,26 @@ fn numeric_field(text: &str, field_name: &str) -> Option<f64> {
     value[..end].parse().ok()
 }
 
-fn dashboard_config_paths() -> Vec<PathBuf> {
+/// Config files to try, in order, each with the format it is written in.
+fn dashboard_config_paths() -> Vec<(PathBuf, ConfigFormat)> {
+    windows_credentials::note_retired_variable(RETIRED_CONFIG_FILE_ENV, CONFIG_FILE_ENV);
     let mut paths = Vec::new();
     if let Some(path) = non_empty_environment(CONFIG_FILE_ENV).map(PathBuf::from) {
-        paths.push(path);
+        paths.push((path, ConfigFormat::Own));
     }
     if let Some(app_data) = non_empty_environment("APPDATA").map(PathBuf::from) {
-        paths.push(app_data.join("opencode-go").join("config.json"));
+        paths.push((app_data.join("opencode-go").join("config.json"), ConfigFormat::Own));
     }
+    let mut other_tool = |base: PathBuf| {
+        for tool in ["opencode-bar", "opencode-quota"] {
+            paths.push((base.join(tool).join("opencode-go.json"), ConfigFormat::OtherTool));
+        }
+    };
     if let Some(config_home) = non_empty_environment("XDG_CONFIG_HOME").map(PathBuf::from) {
-        paths.push(config_home.join("opencode-bar").join("opencode-go.json"));
-        paths.push(config_home.join("opencode-quota").join("opencode-go.json"));
+        other_tool(config_home);
     }
     if let Some(home) = dirs::home_dir() {
-        paths.push(
-            home.join(".config")
-                .join("opencode-bar")
-                .join("opencode-go.json"),
-        );
-        paths.push(
-            home.join(".config")
-                .join("opencode-quota")
-                .join("opencode-go.json"),
-        );
+        other_tool(home.join(".config"));
     }
     paths
 }
@@ -333,7 +416,7 @@ fn credential_watch_signature() -> String {
         }
         None => parts.push("dashboard|missing".to_string()),
     }
-    for path in dashboard_config_paths() {
+    for (path, _) in dashboard_config_paths() {
         parts.push(path_signature("config", &path));
     }
     parts.join(";;")
@@ -361,6 +444,97 @@ fn path_signature(kind: &str, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Write `content` to a unique file under the temp directory.
+    fn config_file(label: &str, content: &str) -> PathBuf {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("ccum-pro-opencode-{label}-{unique}.json"));
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn the_monitors_own_file_reads_an_encrypted_cookie() {
+        let protected = windows_credentials::convert_from_secure_string("Fe26.2**sealed");
+        let path = config_file(
+            "encrypted",
+            &format!(r#"{{"workspaceId":"wrk_01OWN","encryptedAuthCookie":"{protected}"}}"#),
+        );
+        let credentials = read_dashboard_config(&path, ConfigFormat::Own).expect("decrypted");
+        assert_eq!(credentials.workspace_id, "wrk_01OWN");
+        assert_eq!(credentials.auth_cookie, "Fe26.2**sealed");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn a_file_saved_with_a_byte_order_mark_is_still_read() {
+        let protected = windows_credentials::convert_from_secure_string("Fe26.2**sealed");
+        let path = config_file(
+            "bom",
+            &format!("\u{feff}{{\"workspaceId\":\"wrk_01OWN\",\"encryptedAuthCookie\":\"{protected}\"}}"),
+        );
+        assert!(read_dashboard_config(&path, ConfigFormat::Own).is_some());
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn the_monitors_own_file_refuses_a_plain_text_cookie() {
+        let plain = config_file("plain", r#"{"workspaceId":"wrk_01OWN","authCookie":"Fe26.2**sealed"}"#);
+        assert!(read_dashboard_config(&plain, ConfigFormat::Own).is_none());
+        // Plain text placed in the encrypted field is refused too.
+        let mislabelled = config_file(
+            "mislabelled",
+            r#"{"workspaceId":"wrk_01OWN","encryptedAuthCookie":"Fe26.2**sealed"}"#,
+        );
+        assert!(read_dashboard_config(&mislabelled, ConfigFormat::Own).is_none());
+        std::fs::remove_file(plain).ok();
+        std::fs::remove_file(mislabelled).ok();
+    }
+
+    #[test]
+    fn another_tools_file_is_read_in_that_tools_format() {
+        let path = config_file("other", r#"{"workspaceId":"wrk_01BAR","authCookie":"Fe26.2**bar"}"#);
+        let credentials = read_dashboard_config(&path, ConfigFormat::OtherTool).expect("read as-is");
+        assert_eq!(credentials.auth_cookie, "Fe26.2**bar");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn a_file_named_by_the_config_variable_uses_the_encrypted_format() {
+        // The only test touching this variable, so parallel tests cannot race.
+        std::env::set_var(CONFIG_FILE_ENV, r"C:\custom\opencode.json");
+        let paths = dashboard_config_paths();
+        std::env::remove_var(CONFIG_FILE_ENV);
+        assert_eq!(paths[0], (PathBuf::from(r"C:\custom\opencode.json"), ConfigFormat::Own));
+        assert!(paths
+            .iter()
+            .filter(|(path, _)| path.to_string_lossy().contains("opencode-bar")
+                || path.to_string_lossy().contains("opencode-quota"))
+            .all(|(_, format)| *format == ConfigFormat::OtherTool));
+    }
+
+    #[test]
+    fn the_session_cookie_is_read_only_when_it_is_protected() {
+        // The only test touching these variables, so parallel tests cannot race.
+        std::env::set_var(WORKSPACE_ID_ENV, "wrk_01TESTWORKSPACE");
+        std::env::set_var(
+            AUTH_COOKIE_ENV,
+            windows_credentials::convert_from_secure_string("Fe26.2**sealed-cookie"),
+        );
+        let credentials = read_dashboard_credentials().expect("protected cookie is used");
+        assert_eq!(credentials.source, "environment");
+        assert_eq!(credentials.workspace_id, "wrk_01TESTWORKSPACE");
+        assert_eq!(credentials.auth_cookie, "Fe26.2**sealed-cookie");
+
+        std::env::set_var(AUTH_COOKIE_ENV, "Fe26.2**sealed-cookie");
+        assert!(
+            read_dashboard_credentials().map_or(true, |credentials| credentials.source != "environment"),
+            "a plain-text cookie in the variable must never be used"
+        );
+
+        std::env::remove_var(WORKSPACE_ID_ENV);
+        std::env::remove_var(AUTH_COOKIE_ENV);
+    }
 
     #[test]
     fn dashboard_parser_accepts_serialized_and_html_escaped_windows() {

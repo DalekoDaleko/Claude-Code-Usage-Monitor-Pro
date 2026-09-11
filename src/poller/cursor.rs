@@ -5,12 +5,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
+use super::windows_credentials;
 use super::{build_agent, parse_iso8601, PollError};
 use crate::diagnose;
 use crate::models::{UsageData, UsageSection};
 
 const CURSOR_USAGE_SUMMARY_URL: &str = "https://cursor.com/api/usage-summary";
-const CURSOR_SESSION_TOKEN_ENV: &str = "CURSOR_SESSION_TOKEN";
+/// Optional session-cookie override. Must hold the output of
+/// `ConvertFrom-SecureString`; a plain-text cookie is refused, never used.
+const CURSOR_SESSION_TOKEN_ENV: &str = "CLAUDECODEUSAGE_CURSOR_SESSION_TOKEN";
+/// The upstream name, which held the cookie in plain text. No longer read.
+const RETIRED_CURSOR_SESSION_TOKEN_ENV: &str = "CURSOR_SESSION_TOKEN";
 const CURSOR_ACCESS_TOKEN_KEY: &str = "cursorAuth/accessToken";
 
 #[derive(Deserialize)]
@@ -39,7 +44,7 @@ struct CursorPlanUsage {
 pub(super) fn poll_cursor() -> Result<UsageData, PollError> {
     let cookie = read_cursor_session_cookie().ok_or_else(|| {
         diagnose::log(
-            "Cursor usage poll failed: no Cursor session found (sign in to Cursor or set CURSOR_SESSION_TOKEN)",
+            "Cursor usage poll failed: no Cursor session found (sign in to Cursor or set CLAUDECODEUSAGE_CURSOR_SESSION_TOKEN)",
         );
         PollError::NoCredentials
     })?;
@@ -56,10 +61,15 @@ pub(super) fn credential_watch_snapshot(_all_sources: bool) -> Vec<String> {
     vec![environment, database]
 }
 
-/// Resolve a Cursor dashboard session cookie. An explicit environment value
-/// takes priority over the access token persisted by Cursor itself.
+/// Resolve a Cursor dashboard session cookie. An explicit, DPAPI-protected
+/// environment value takes priority over the access token persisted by Cursor
+/// itself; a value that does not decrypt is logged and skipped.
 fn read_cursor_session_cookie() -> Option<String> {
-    if let Some(token) = non_empty_environment(CURSOR_SESSION_TOKEN_ENV) {
+    windows_credentials::note_retired_variable(
+        RETIRED_CURSOR_SESSION_TOKEN_ENV,
+        CURSOR_SESSION_TOKEN_ENV,
+    );
+    if let Some(token) = windows_credentials::protected_environment_value(CURSOR_SESSION_TOKEN_ENV) {
         return normalize_cursor_session_cookie(&token);
     }
 
@@ -274,6 +284,28 @@ fn path_signature(kind: &str, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_session_token_is_read_only_when_it_is_protected() {
+        // The only test touching this variable, so parallel tests cannot race.
+        let token = "user_01TESTUSER%3A%3AeyJhbGciOiJIUzI1NiJ9.payload.sig";
+        std::env::set_var(
+            CURSOR_SESSION_TOKEN_ENV,
+            windows_credentials::convert_from_secure_string(token),
+        );
+        assert_eq!(read_cursor_session_cookie().as_deref(), Some(token));
+
+        // Refused rather than used; what remains depends on whether Cursor
+        // itself is installed on the machine running the test.
+        std::env::set_var(CURSOR_SESSION_TOKEN_ENV, token);
+        assert_ne!(
+            read_cursor_session_cookie().as_deref(),
+            Some(token),
+            "a plain-text token in the variable must never be used"
+        );
+
+        std::env::remove_var(CURSOR_SESSION_TOKEN_ENV);
+    }
 
     #[test]
     fn extracts_cursor_user_id_from_a_jwt() {
