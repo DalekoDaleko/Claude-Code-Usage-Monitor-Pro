@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 PackageIdentifier: DalekoDaleko.ClaudeCodeUsageMonitorPro
-PackageVersion: 2.13.1
+PackageVersion: 2.14.0
 PackageLocale: en-US
 Publisher: Vitaliy Titov
 PublisherUrl: https://github.com/DalekoDaleko
@@ -45,6 +45,14 @@ Description: |-
     alongside the original; existing settings are copied over on first run.
   - The executable is self-contained: the C runtime is built in, so it does not
     need the Visual C++ Redistributable, only DLLs that ship with Windows.
+  - The dashboard draws with Direct3D 12, so it also opens in virtual machines and
+    Remote Desktop sessions without a GPU driver, where OpenGL was unavailable.
+  - The Claude desktop app's sign-in is also found when the app came from the
+    Microsoft Store, and a valid token from any source is used before an expired one.
+  - An About page shows the version and, for each provider, where its sign-in comes
+    from and when it expires, without ever showing a token.
+  - Cursor's database is read in place instead of being copied to a temp folder.
+  - Translations are complete in all 14 languages.
 Moniker: claude-code-usage-monitor-pro
 Tags:
   - ai
@@ -56,6 +64,6 @@ Tags:
   - taskbar
   - usage
   - widget
-ReleaseNotesUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/tag/v2.13.1
+ReleaseNotesUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/tag/v2.14.0
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0
