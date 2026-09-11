@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
 PackageIdentifier: DalekoDaleko.ClaudeCodeUsageMonitorPro
-PackageVersion: 2.11.0
+PackageVersion: 2.11.1
 MinimumOSVersion: 10.0.19041.0
 InstallerType: portable
 Commands:
@@ -8,7 +8,7 @@ Commands:
 ReleaseDate: 2026-09-11
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/download/v2.11.0/claude-code-usage-monitor.exe
-    InstallerSha256: A096A4AD265C3160145FD85C1E3208CBB013AD1535D04E1ECC691CA28A2F4BEB
+    InstallerUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/download/v2.11.1/claude-code-usage-monitor-pro.exe
+    InstallerSha256: C4FD5789420BDCAE263F5CF670E9039B307D39105BB5AB052B4D74560D510EED
 ManifestType: installer
 ManifestVersion: 1.6.0
