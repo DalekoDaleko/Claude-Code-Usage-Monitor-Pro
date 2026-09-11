@@ -12,7 +12,7 @@ A lightweight, open-source Windows taskbar widget for monitoring Claude Code usa
 > in [Changes in this fork](#changes-in-this-fork). It is not affiliated with, endorsed by, or
 > supported by Code Zeno Pty Ltd — please report issues with this fork here, not upstream.
 
-![Claude Code Usage Monitor running in the Windows taskbar](.github/animation.gif)
+![Claude Code Usage Monitor Pro running in the Windows taskbar](.github/animation.gif)
 
 ## Features
 
@@ -34,17 +34,16 @@ Claude Code credentials can be detected from the CLI, Claude desktop app, or WSL
 
 ## Installation
 
-This fork is not published to WinGet. Build it from source (see
-[Build from source](#build-from-source)).
-
-To install the **original** application instead:
+Install the latest release with WinGet:
 
 ```powershell
-winget install CodeZeno.ClaudeCodeUsageMonitor
+winget install DalekoDaleko.ClaudeCodeUsageMonitorPro
 ```
 
-or download `claude-code-usage-monitor.exe` from the upstream
-[GitHub Releases](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases).
+or download `claude-code-usage-monitor-pro.exe` from
+[GitHub Releases](https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases).
+
+You can also [build it from source](#build-from-source).
 
 ## Usage
 
