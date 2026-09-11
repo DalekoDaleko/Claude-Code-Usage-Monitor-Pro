@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 PackageIdentifier: DalekoDaleko.ClaudeCodeUsageMonitorPro
-PackageVersion: 2.11.1
+PackageVersion: 2.12.0
 PackageLocale: en-US
 Publisher: Vitaliy Titov
 PublisherUrl: https://github.com/DalekoDaleko
@@ -12,10 +12,11 @@ License: MIT
 LicenseUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/blob/main/LICENSE
 Copyright: Copyright (c) 2026 Vitaliy Titov. Copyright (c) 2025 Craig Constable (original author).
 CopyrightUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/blob/main/LICENSE
-ShortDescription: Windows taskbar widget showing Claude Code usage limits and reset times. Unofficial fork of Claude Code Usage Monitor by Craig Constable.
+ShortDescription: Windows taskbar widget showing Claude Code and GitHub Copilot usage limits and reset times. Unofficial fork of Claude Code Usage Monitor by Craig Constable.
 Description: |-
   A Windows taskbar widget that shows current usage and time remaining until each
-  limit resets, for Claude Code, Codex, Google Antigravity, OpenCode Go, and Cursor.
+  limit resets, for Claude Code, Codex, Google Antigravity, OpenCode Go, Cursor, and
+  GitHub Copilot.
   It collects no analytics or telemetry, and sends each provider's credentials only
   to that provider's own API.
 
@@ -26,6 +27,8 @@ Description: |-
   separately as CodeZeno.ClaudeCodeUsageMonitor.
 
   Changes in this fork:
+  - Adds GitHub Copilot, showing the monthly premium-request allowance. Its token is
+    read only from DPAPI-protected sources, never from a plain-text variable.
   - The widget floats clear of the taskbar when the running-application buttons
     leave no room, instead of drawing over them and the overflow button. It can be
     dragged, and remembers where it was put.
@@ -41,11 +44,13 @@ Moniker: claude-code-usage-monitor-pro
 Tags:
   - ai
   - claude
+  - copilot
   - developer-tools
+  - github
   - monitoring
   - taskbar
   - usage
   - widget
-ReleaseNotesUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/tag/v2.11.1
+ReleaseNotesUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/tag/v2.12.0
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0
