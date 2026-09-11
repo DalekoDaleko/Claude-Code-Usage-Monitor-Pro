@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 PackageIdentifier: DalekoDaleko.ClaudeCodeUsageMonitorPro
-PackageVersion: 2.13.0
+PackageVersion: 2.13.1
 PackageLocale: en-US
 Publisher: Vitaliy Titov
 PublisherUrl: https://github.com/DalekoDaleko
@@ -43,6 +43,8 @@ Description: |-
     executable with a download that was never signature- or hash-verified.
   - Keeps its own settings, startup entry and window names, so it can be installed
     alongside the original; existing settings are copied over on first run.
+  - The executable is self-contained: the C runtime is built in, so it does not
+    need the Visual C++ Redistributable, only DLLs that ship with Windows.
 Moniker: claude-code-usage-monitor-pro
 Tags:
   - ai
@@ -54,6 +56,6 @@ Tags:
   - taskbar
   - usage
   - widget
-ReleaseNotesUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/tag/v2.13.0
+ReleaseNotesUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/tag/v2.13.1
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0
