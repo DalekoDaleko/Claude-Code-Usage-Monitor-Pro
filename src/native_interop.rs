@@ -256,7 +256,7 @@ mod open_in_browser_tests {
             let lowercase = url.trim().to_ascii_lowercase();
             lowercase.starts_with("http://") || lowercase.starts_with("https://")
         };
-        assert!(accepted("  https://github.com/CodeZeno/Claude-Code-Usage-Monitor  "));
+        assert!(accepted("  https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro  "));
         assert!(accepted("HTTPS://EXAMPLE.COM"));
         assert!(!accepted("https:/example.com"));
         assert!(!accepted("ftp://example.com"));

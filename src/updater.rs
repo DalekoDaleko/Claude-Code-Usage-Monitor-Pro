@@ -13,7 +13,7 @@ const GITHUB_API_VERSION: &str = "2022-11-28";
 const RELEASE_ASSET_NAME: &str = "claude-code-usage-monitor.exe";
 const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 // Keep this aligned with the package identifier used in winget-pkgs.
-const WINGET_PACKAGE_ID: &str = "CodeZeno.ClaudeCodeUsageMonitor";
+const WINGET_PACKAGE_ID: &str = "DalekoDaleko.ClaudeCodeUsageMonitorPro";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallChannel {

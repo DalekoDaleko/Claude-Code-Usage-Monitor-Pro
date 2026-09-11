@@ -190,6 +190,7 @@ same MIT licence with the original copyright notice intact.
 
 ## License
 
-Licensed under the [MIT License](LICENSE) — Copyright (c) 2025 Craig Constable.
+Licensed under the [MIT License](LICENSE).
 
-Modifications in this fork are released under the same licence.
+- Copyright (c) 2026 Vitaliy Titov (updates to UI and self-update logic)
+- Copyright (c) 2025 Craig Constable (original author)
