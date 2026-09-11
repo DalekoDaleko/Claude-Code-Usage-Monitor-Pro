@@ -1,6 +1,10 @@
 # WinGet manifests
 
-Bootstrap manifests used to add this package to the
+> Run every command below from the repository root. `winget` parses *every* file in the
+> manifest folder, which is why the manifests live in `manifests/` and this README sits
+> beside it rather than inside it.
+
+Bootstrap manifests (in `manifests/`) used to add this package to the
 [WinGet Community Repository](https://github.com/microsoft/winget-pkgs) for the first time.
 
 The release workflow submits *updates* with `wingetcreate update`, which edits a manifest that
@@ -14,14 +18,14 @@ the initial submission rather than a live source of truth.
 Validate locally (this is the same check `winget-pkgs` runs first):
 
 ```powershell
-winget validate --manifest .\winget
+winget validate --manifest .\winget\manifests
 ```
 
 Optionally install from the manifest to confirm it works end to end, which is also what the
 repository's automated validation does:
 
 ```powershell
-winget install --manifest .\winget
+winget install --manifest .\winget\manifests
 ```
 
 Then submit. This opens a pull request against `microsoft/winget-pkgs` from your account, so it
@@ -29,7 +33,7 @@ needs a GitHub personal access token with the `public_repo` scope:
 
 ```powershell
 winget install Microsoft.WingetCreate
-wingetcreate submit --token <YOUR_GITHUB_PAT> .\winget
+wingetcreate submit --token <YOUR_GITHUB_PAT> .\winget\manifests
 ```
 
 The pull request is checked automatically and then reviewed by a human moderator. Expect
