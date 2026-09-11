@@ -29,7 +29,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
-eframe = { version = "0.36", default-features = false, features = ["glow"] }
+# The dashboard renders with Direct3D 12 through wgpu, built with that backend
+# alone: no OpenGL, Vulkan or EGL code is compiled in. See studio_renderer.rs.
+eframe = { version = "0.36", default-features = false, features = ["wgpu_no_default_features"] }
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "dx12"] }
 egui_extras = { version = "0.36", features = ["svg"] }
 lucide-icons = "1.30"
 raw-window-handle = "0.6"

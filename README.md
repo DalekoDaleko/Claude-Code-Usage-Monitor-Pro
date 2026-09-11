@@ -300,6 +300,13 @@ application buttons and the "..." overflow button, making them unreachable.
   `VCRUNTIME140.dll`, which belongs to the Visual C++ Redistributable rather than to Windows. On a PC
   without that redistributable, the upstream build cannot start at all (`STATUS_DLL_NOT_FOUND`,
   `0xC0000135`); this build needs only DLLs that ship with Windows 10 and 11.
+- **The dashboard draws with Direct3D 12.** Upstream used OpenGL, which depends on the graphics
+  vendor's driver; in a virtual machine or a Remote Desktop session without GPU support Windows offers
+  only OpenGL 1.1, and the dashboard failed with "egui_glow requires opengl 2.0+". Direct3D 12 works
+  on any Windows 10 or 11 PC, through WARP, Windows' software renderer, when there is no GPU driver.
+  Only the Direct3D 12 backend is compiled in, with Windows' own FXC shader compiler; wgpu's default
+  of loading `dxcompiler.dll` from the PATH, and its environment-variable overrides for the compiler
+  and runtime, are not used.
 - **Cursor's state database is no longer copied.** When Cursor held a lock on
   `%APPDATA%\Cursor\User\globalStorage\state.vscdb`, upstream copied the whole database, which holds
   everything Cursor stores, to `%TEMP%`, read the token from the copy and deleted it, ignoring a

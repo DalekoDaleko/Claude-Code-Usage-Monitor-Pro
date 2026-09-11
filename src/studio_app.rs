@@ -140,7 +140,8 @@ pub fn handle_cli_mode(args: &[String]) -> bool {
             .with_title("Claude Usage Monitor Pro")
             .with_inner_size([dashboard_width, dashboard_height])
             .with_icon(dashboard_icon),
-        renderer: eframe::Renderer::Glow,
+        renderer: eframe::Renderer::Wgpu,
+        wgpu_options: studio_renderer::wgpu_configuration(),
         centered: true,
         ..Default::default()
     };
@@ -842,7 +843,7 @@ impl eframe::App for StudioApp {
         ui.ctx().request_repaint_after(Duration::from_millis(500));
     }
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    fn on_exit(&mut self) {
         // Reload first so a monitor-process settings update made while the
         // dashboard was open is not overwritten by this final size save.
         let mut settings = app_settings::load_settings();
@@ -1039,5 +1040,6 @@ mod studio_inspectors;
 use studio_inspectors::*;
 mod studio_utilities;
 use studio_utilities::*;
+mod studio_renderer;
 #[cfg(test)]
 mod tests;
