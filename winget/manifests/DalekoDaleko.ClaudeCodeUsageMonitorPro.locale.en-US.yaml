@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 PackageIdentifier: DalekoDaleko.ClaudeCodeUsageMonitorPro
-PackageVersion: 2.12.0
+PackageVersion: 2.13.0
 PackageLocale: en-US
 Publisher: Vitaliy Titov
 PublisherUrl: https://github.com/DalekoDaleko
@@ -29,6 +29,9 @@ Description: |-
   Changes in this fork:
   - Adds GitHub Copilot, showing the monthly premium-request allowance. Its token is
     read only from DPAPI-protected sources, never from a plain-text variable.
+  - Secrets for OpenCode Go and Cursor, like the Copilot token, must be encrypted
+    with DPAPI; a plain-text value in an environment variable or in the monitor's own
+    config file is refused.
   - The widget floats clear of the taskbar when the running-application buttons
     leave no room, instead of drawing over them and the overflow button. It can be
     dragged, and remembers where it was put.
@@ -51,6 +54,6 @@ Tags:
   - taskbar
   - usage
   - widget
-ReleaseNotesUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/tag/v2.12.0
+ReleaseNotesUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/tag/v2.13.0
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0
