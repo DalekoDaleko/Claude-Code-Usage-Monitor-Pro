@@ -227,14 +227,55 @@ pub const APP_DATA_FOLDER: &str = "ClaudeCodeUsageMonitorPro";
 /// The original project's folder, read once to seed this fork's own.
 const UPSTREAM_APP_DATA_FOLDER: &str = "ClaudeCodeUsageMonitor";
 
+/// This fork's settings folder; themes, assets and context menus live inside
+/// it. Every path the application writes its own state to derives from here.
 pub fn app_data_directory() -> PathBuf {
     appdata_root().join(APP_DATA_FOLDER)
 }
 
+#[cfg(not(test))]
 fn appdata_root() -> PathBuf {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Tests must never read or write the settings, themes or context menus of
+/// whoever runs them, so a test build keeps its own stand-in for `%APPDATA%`:
+/// one folder per test process under the temp directory.
+#[cfg(test)]
+fn appdata_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let parent = std::env::temp_dir().join("ccum-pro-test-appdata");
+        remove_stale_test_roots(&parent);
+        let root = parent.join(std::process::id().to_string());
+        // A reused process id must not inherit an earlier run's files.
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("the test APPDATA folder must be creatable");
+        root
+    })
+    .clone()
+}
+
+/// Clear folders left by earlier test runs. Another test process may be using
+/// its folder right now, so only one untouched for an hour counts as left over.
+#[cfg(test)]
+fn remove_stale_test_roots(parent: &Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > std::time::Duration::from_secs(60 * 60));
+        if stale {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Seed this fork's settings folder from the original project's, once.
@@ -249,10 +290,10 @@ fn appdata_root() -> PathBuf {
 pub fn migrate_from_original_settings() {
     let destination = app_data_directory();
     // Keyed on the settings file rather than the folder. The folder gets
-    // created incidentally — `ensure_starter_theme` writes into `themes/`, and
-    // the test suite does the same — which would otherwise silently skip the
-    // copy and leave the user on defaults. `settings.json` is written only once
-    // this fork has settings of its own worth keeping.
+    // created incidentally — `ensure_starter_theme` writes into `themes/` —
+    // which would otherwise silently skip the copy and leave the user on
+    // defaults. `settings.json` is written only once this fork has settings of
+    // its own worth keeping.
     if settings_path().exists() {
         return;
     }
@@ -470,6 +511,28 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Running the tests once wrote built-in menus and themes into the real
+    /// `%APPDATA%\ClaudeCodeUsageMonitorPro` of whoever ran them.
+    #[test]
+    fn tests_never_touch_the_real_application_folder() {
+        let root = app_data_directory();
+        let sandbox = std::env::temp_dir().join("ccum-pro-test-appdata");
+        assert!(root.starts_with(&sandbox), "{}", root.display());
+        if let Some(real) = std::env::var_os("APPDATA") {
+            assert!(!root.starts_with(PathBuf::from(real)), "{}", root.display());
+        }
+        for folder in [
+            settings_path(),
+            usage_cache_path(),
+            codex_credits_path(),
+            crate::theme_engine::themes_directory(),
+            crate::theme_engine::assets_directory(),
+            crate::context_menu::context_menus_directory(),
+        ] {
+            assert!(folder.starts_with(&root), "{}", folder.display());
+        }
+    }
 
     /// A unique scratch directory, removed when the test finishes.
     struct Scratch(PathBuf);
