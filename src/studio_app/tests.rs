@@ -587,6 +587,20 @@ fn context_menu_action_script_rejects_multiple_or_unsafe_actions() {
 }
 
 #[test]
+fn text_helper_catalog_has_a_group_for_every_provider() {
+    for descriptor in crate::providers::PROVIDER_DESCRIPTORS {
+        let prefix = format!("{}.", descriptor.key);
+        assert!(
+            TEXT_TEMPLATE_VALUES.iter().any(|value| {
+                value.group == descriptor.display_name && value.expression.starts_with(&prefix)
+            }),
+            "no text helper values for {}",
+            descriptor.display_name
+        );
+    }
+}
+
+#[test]
 fn text_helper_catalog_only_builds_valid_template_tokens() {
     let context = DataContext::from_usage(None, &Canvas::default());
     for value in TEXT_TEMPLATE_VALUES {

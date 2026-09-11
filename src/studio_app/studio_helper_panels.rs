@@ -471,6 +471,38 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
         expression: "cursor.weekly.reset.seconds",
         kind: TextTemplateValueKind::Duration,
     },
+    // Copilot reports one monthly allowance, in its session slot; its weekly
+    // slot is reserved and always zero, so it is not offered here.
+    TextTemplateValue {
+        group: "GitHub Copilot",
+        label: "Premium requests summary",
+        expression: "copilot.session",
+        kind: TextTemplateValueKind::UsageSummary,
+    },
+    TextTemplateValue {
+        group: "GitHub Copilot",
+        label: "Premium requests used",
+        expression: "copilot.session.percentage",
+        kind: TextTemplateValueKind::Percentage,
+    },
+    TextTemplateValue {
+        group: "GitHub Copilot",
+        label: "Premium requests remaining",
+        expression: "copilot.session.remaining",
+        kind: TextTemplateValueKind::Percentage,
+    },
+    TextTemplateValue {
+        group: "GitHub Copilot",
+        label: "Premium requests shown",
+        expression: "copilot.session.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
+    },
+    TextTemplateValue {
+        group: "GitHub Copilot",
+        label: "Premium requests reset",
+        expression: "copilot.session.reset.seconds",
+        kind: TextTemplateValueKind::Duration,
+    },
     TextTemplateValue {
         group: "Labels",
         label: "Session window label",

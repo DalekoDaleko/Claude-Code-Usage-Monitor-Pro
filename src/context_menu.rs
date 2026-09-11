@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::providers::ProviderId;
+use crate::providers::{ProviderId, PROVIDER_DESCRIPTORS};
 
 pub const CONTEXT_MENU_SCHEMA_VERSION: u32 = 1;
 pub const CLASSIC_CONTEXT_MENU_ID: &str = "classic-v1";
@@ -287,11 +287,6 @@ pub fn rendered_label(
         "System default" => language.text("System default"),
         "Refresh" => language.text("Refresh"),
         "Exit" => language.text("Exit"),
-        "Claude Code" => language.text("Claude Code"),
-        "Codex" => language.text("Codex"),
-        "Antigravity" => language.text("Antigravity"),
-        "OpenCode" => language.text("OpenCode"),
-        "Cursor" => language.text("Cursor"),
         "Open Dashboard" => language.text("Open Dashboard"),
         "Every minute" => language.text("Every minute"),
         "Every 5 minutes" => language.text("Every 5 minutes"),
@@ -300,14 +295,18 @@ pub fn rendered_label(
         "Providers" => language.text("Providers"),
         "Check for updates" => language.text("Check for updates"),
         "Show widget" => language.text("Show widget"),
-        _ => label,
+        // Provider names come from the registry, so a new provider cannot be
+        // left out of this list.
+        _ => PROVIDER_DESCRIPTORS
+            .iter()
+            .find(|descriptor| descriptor.display_name == label)
+            .map_or(label, |descriptor| language.text(descriptor.display_name)),
     };
     crate::theme_engine::format_template(translated, context)
 }
 
 pub fn classic_context_menu() -> ContextMenuDocument {
     use ContextMenuAction as Action;
-    use ContextMenuProvider as Provider;
 
     let frequency = ContextMenuItem::submenu(
         "update-frequency",
@@ -343,46 +342,23 @@ pub fn classic_context_menu() -> ContextMenuDocument {
             ),
         ],
     );
+    // One toggle per registered provider, in registry order, so a provider
+    // added to the registry appears here without being listed by hand.
     let providers = ContextMenuItem::submenu(
         "providers",
         "Providers",
-        vec![
-            ContextMenuItem::action(
-                "provider-claude",
-                "Claude Code",
-                Action::ToggleProvider {
-                    provider: Provider::Claude,
-                },
-            ),
-            ContextMenuItem::action(
-                "provider-codex",
-                "Codex",
-                Action::ToggleProvider {
-                    provider: Provider::Codex,
-                },
-            ),
-            ContextMenuItem::action(
-                "provider-antigravity",
-                "Antigravity",
-                Action::ToggleProvider {
-                    provider: Provider::Antigravity,
-                },
-            ),
-            ContextMenuItem::action(
-                "provider-opencode",
-                "OpenCode",
-                Action::ToggleProvider {
-                    provider: Provider::OpenCode,
-                },
-            ),
-            ContextMenuItem::action(
-                "provider-cursor",
-                "Cursor",
-                Action::ToggleProvider {
-                    provider: Provider::Cursor,
-                },
-            ),
-        ],
+        PROVIDER_DESCRIPTORS
+            .iter()
+            .map(|descriptor| {
+                ContextMenuItem::action(
+                    &format!("provider-{}", descriptor.key),
+                    descriptor.display_name,
+                    Action::ToggleProvider {
+                        provider: descriptor.id,
+                    },
+                )
+            })
+            .collect(),
     );
     let languages = std::iter::once(ContextMenuItem::action(
         "language-system",
@@ -696,6 +672,61 @@ mod tests {
         let mut legacy = menu.clone();
         legacy.id = LEGACY_CLASSIC_CONTEXT_MENU_ID.into();
         assert!(legacy.is_builtin());
+    }
+
+    #[test]
+    fn classic_menu_has_a_toggle_for_every_provider() {
+        let menu = classic_context_menu();
+        let providers = menu
+            .items
+            .iter()
+            .find_map(|item| match &item.kind {
+                ContextMenuItemKind::Submenu { items } if item.id == "providers" => Some(items),
+                _ => None,
+            })
+            .expect("the Classic menu has a Providers submenu");
+        let toggled: Vec<_> = providers
+            .iter()
+            .filter_map(|item| match &item.kind {
+                ContextMenuItemKind::Action {
+                    action: ContextMenuAction::ToggleProvider { provider },
+                } => Some(*provider),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(toggled, ProviderId::ALL);
+        // Item ids are part of the saved document; the original five must not
+        // change when the list is built from the registry.
+        let ids: Vec<_> = providers.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "provider-claude",
+                "provider-codex",
+                "provider-antigravity",
+                "provider-opencode",
+                "provider-cursor",
+                "provider-copilot",
+            ]
+        );
+    }
+
+    #[test]
+    fn provider_labels_resolve_through_the_registry() {
+        let context = crate::theme_engine::DataContext::from_usage(
+            None,
+            &crate::theme_engine::Canvas::default(),
+        );
+        for descriptor in PROVIDER_DESCRIPTORS {
+            assert_eq!(
+                rendered_label(
+                    crate::localization::LanguageId::English,
+                    descriptor.display_name,
+                    &context
+                ),
+                descriptor.display_name
+            );
+        }
     }
 
     #[test]
