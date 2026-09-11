@@ -1250,7 +1250,7 @@ fn begin_winget_update(hwnd: HWND) {
 }
 
 const STARTUP_REGISTRY_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const STARTUP_REGISTRY_KEY: &str = "ClaudeCodeUsageMonitor";
+const STARTUP_REGISTRY_KEY: &str = "ClaudeCodeUsageMonitorPro";
 
 /// Returns true only if the startup registry value points to this executable.
 pub(crate) fn is_startup_enabled() -> bool {
@@ -1557,7 +1557,7 @@ unsafe fn create_desktop_surface_window() -> HWND {
         return HWND::default();
     };
     let instance = GetModuleHandleW(PCWSTR::null()).unwrap();
-    let class = native_interop::wide_str("CCUMDesktopSurface");
+    let class = native_interop::wide_str("CCUMProDesktopSurface");
     let title = native_interop::wide_str("");
     let wc = WNDCLASSEXW {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -1599,7 +1599,7 @@ unsafe fn create_desktop_surface_window() -> HWND {
 
 unsafe fn create_mirror_window() -> HWND {
     let instance = GetModuleHandleW(PCWSTR::null()).unwrap();
-    let class = native_interop::wide_str("CCUMThemeMirror");
+    let class = native_interop::wide_str("CCUMProThemeMirror");
     let wc = WNDCLASSEXW {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
         style: CS_DBLCLKS,
@@ -1730,9 +1730,9 @@ pub fn run() {
     // wait for the previous instance to release the mutex, then take over.
     let is_relaunch = std::env::var(ENV_RELAUNCH).is_ok();
     let mutex_name = native_interop::wide_str(&if allow_multiple {
-        format!("Global\\ClaudeCodeUsageMonitor-{}", std::process::id())
+        format!("Global\\ClaudeCodeUsageMonitorPro-{}", std::process::id())
     } else {
-        "Global\\ClaudeCodeUsageMonitor".to_string()
+        "Global\\ClaudeCodeUsageMonitorPro".to_string()
     });
     let _mutex = unsafe {
         let handle = CreateMutexW(None, true, PCWSTR::from_raw(mutex_name.as_ptr()));
@@ -1770,7 +1770,7 @@ pub fn run() {
         }
     };
 
-    let class_name = native_interop::wide_str("ClaudeCodeUsageMonitor");
+    let class_name = native_interop::wide_str("ClaudeCodeUsageMonitorPro");
 
     unsafe {
         let hinstance = GetModuleHandleW(PCWSTR::null()).unwrap();

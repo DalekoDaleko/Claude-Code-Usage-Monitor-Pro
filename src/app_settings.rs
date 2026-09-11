@@ -211,11 +211,119 @@ pub struct UsageCache {
     pub data: AppUsageData,
 }
 
+/// Folder under `%APPDATA%` holding settings, themes, context menus and the
+/// usage cache.
+///
+/// Deliberately distinct from the folder the original project uses, so this
+/// fork and the original can be installed side by side without overwriting
+/// each other's settings.
+pub const APP_DATA_FOLDER: &str = "ClaudeCodeUsageMonitorPro";
+
+/// The original project's folder, read once to seed this fork's own.
+const UPSTREAM_APP_DATA_FOLDER: &str = "ClaudeCodeUsageMonitor";
+
 pub fn app_data_directory() -> PathBuf {
-    let root = std::env::var_os("APPDATA")
+    appdata_root().join(APP_DATA_FOLDER)
+}
+
+fn appdata_root() -> PathBuf {
+    std::env::var_os("APPDATA")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    root.join("ClaudeCodeUsageMonitor")
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Seed this fork's settings folder from the original project's, once.
+///
+/// Someone switching from the original would otherwise start from defaults and
+/// lose their themes, widget position and provider selection. The original
+/// folder is only ever read — never moved or deleted — so the original
+/// application keeps working exactly as before.
+///
+/// Does nothing once this fork has a folder of its own, so a later change to
+/// the original's settings never reaches back into this one.
+pub fn migrate_from_original_settings() {
+    let destination = app_data_directory();
+    // Keyed on the settings file rather than the folder. The folder gets
+    // created incidentally — `ensure_starter_theme` writes into `themes/`, and
+    // the test suite does the same — which would otherwise silently skip the
+    // copy and leave the user on defaults. `settings.json` is written only once
+    // this fork has settings of its own worth keeping.
+    if settings_path().exists() {
+        return;
+    }
+    let source = appdata_root().join(UPSTREAM_APP_DATA_FOLDER);
+    if !source.is_dir() {
+        return;
+    }
+
+    match copy_directory(&source, &destination) {
+        Ok(count) => {
+            crate::diagnose::log(format!(
+                "copied {count} settings file(s) from {} into {}",
+                source.display(),
+                destination.display()
+            ));
+            repoint_active_theme(&source, &destination);
+        }
+        Err(error) => {
+            crate::diagnose::log(format!(
+                "unable to copy settings from {}: {error}; starting from defaults",
+                source.display()
+            ));
+        }
+    }
+}
+
+/// Rewrite the copied `active_theme_path` to the matching file in this fork's
+/// own folder.
+///
+/// The setting holds an absolute path. Left alone it would still resolve — the
+/// original folder is intact — so this fork would silently read *and write* the
+/// original application's theme file, editing a theme belonging to the other
+/// install.
+fn repoint_active_theme(source: &Path, destination: &Path) {
+    let settings_file = destination.join("settings.json");
+    let Ok(contents) = std::fs::read_to_string(&settings_file) else {
+        return;
+    };
+    let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return;
+    };
+    let Some(active) = settings.get("active_theme_path").and_then(|v| v.as_str()) else {
+        return;
+    };
+
+    // Only rewrite a path that actually lives in the original folder; a theme
+    // the user stored elsewhere should keep pointing where they put it.
+    let Ok(relative) = Path::new(active).strip_prefix(source) else {
+        return;
+    };
+    let moved = destination.join(relative);
+    settings["active_theme_path"] = serde_json::Value::String(moved.to_string_lossy().into_owned());
+
+    if let Ok(serialized) = serde_json::to_string_pretty(&settings) {
+        if std::fs::write(&settings_file, serialized).is_ok() {
+            crate::diagnose::log(format!("active theme now read from {}", moved.display()));
+        }
+    }
+}
+
+/// Recursively copy `source` into `destination`, returning the file count.
+fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<usize> {
+    std::fs::create_dir_all(destination)?;
+    let mut copied = 0;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copied += copy_directory(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
 }
 
 pub fn settings_path() -> PathBuf {
@@ -357,6 +465,121 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A unique scratch directory, removed when the test finishes.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(label: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("ccum-pro-{label}-{unique}"));
+            std::fs::create_dir_all(&path).expect("scratch directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn copying_settings_preserves_nested_files() {
+        let scratch = Scratch::new("copy");
+        let source = scratch.0.join("from");
+        let destination = scratch.0.join("to");
+        std::fs::create_dir_all(source.join("themes/assets")).unwrap();
+        std::fs::write(source.join("settings.json"), "{}").unwrap();
+        std::fs::write(source.join("themes/classic.json"), "{}").unwrap();
+        std::fs::write(source.join("themes/assets/icon.png"), [1u8, 2, 3]).unwrap();
+
+        assert_eq!(copy_directory(&source, &destination).unwrap(), 3);
+        assert!(destination.join("settings.json").is_file());
+        assert!(destination.join("themes/classic.json").is_file());
+        assert_eq!(
+            std::fs::read(destination.join("themes/assets/icon.png")).unwrap(),
+            [1u8, 2, 3],
+            "nested binary assets must survive the copy"
+        );
+    }
+
+    #[test]
+    fn migrated_theme_path_points_into_the_new_folder() {
+        let scratch = Scratch::new("repoint");
+        let source = scratch.0.join("Original");
+        let destination = scratch.0.join("Pro");
+        std::fs::create_dir_all(&destination).unwrap();
+        let original_theme = source.join("themes").join("classic.json");
+        std::fs::write(
+            destination.join("settings.json"),
+            serde_json::json!({ "active_theme_path": original_theme.to_string_lossy() }).to_string(),
+        )
+        .unwrap();
+
+        repoint_active_theme(&source, &destination);
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(destination.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            written["active_theme_path"].as_str().unwrap(),
+            destination.join("themes").join("classic.json").to_string_lossy(),
+            "the fork must not read or write the original install's theme file"
+        );
+    }
+
+    #[test]
+    fn a_theme_stored_outside_the_original_folder_is_left_alone() {
+        let scratch = Scratch::new("external");
+        let source = scratch.0.join("Original");
+        let destination = scratch.0.join("Pro");
+        std::fs::create_dir_all(&destination).unwrap();
+        let elsewhere = "D:\\my-themes\\custom.json";
+        std::fs::write(
+            destination.join("settings.json"),
+            serde_json::json!({ "active_theme_path": elsewhere }).to_string(),
+        )
+        .unwrap();
+
+        repoint_active_theme(&source, &destination);
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(destination.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(written["active_theme_path"].as_str().unwrap(), elsewhere);
+    }
+
+    #[test]
+    fn an_incidental_themes_folder_does_not_block_the_copy() {
+        // `ensure_starter_theme` and the test suite both create `themes/`
+        // before any settings exist. Keying the migration on the folder made
+        // that silently skip the copy and strand the user on defaults.
+        let scratch = Scratch::new("incidental");
+        let source = scratch.0.join("Original");
+        let destination = scratch.0.join("Pro");
+        std::fs::create_dir_all(source.join("themes")).unwrap();
+        std::fs::write(source.join("settings.json"), r#"{"poll_interval_ms":300000}"#).unwrap();
+        std::fs::create_dir_all(destination.join("themes")).unwrap();
+
+        assert!(
+            !destination.join("settings.json").exists(),
+            "the marker the migration keys on must still be absent"
+        );
+        assert_eq!(copy_directory(&source, &destination).unwrap(), 1);
+        assert!(destination.join("settings.json").is_file());
+    }
+
+    #[test]
+    fn the_fork_uses_its_own_folder() {
+        assert_ne!(
+            APP_DATA_FOLDER, UPSTREAM_APP_DATA_FOLDER,
+            "sharing a settings folder lets the two installs overwrite each other"
+        );
+    }
 
     #[test]
     fn settings_never_disable_every_provider() {

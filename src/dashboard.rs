@@ -15,9 +15,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_RESTORE, WM_CLOSE,
 };
 
-const DASHBOARD_TITLE: &str = "Usage Monitor";
-const DASHBOARD_MUTEX: &str = "Local\\ClaudeCodeUsageMonitorDashboard";
-const DASHBOARD_REQUEST_EVENT: &str = "Local\\ClaudeCodeUsageMonitorOpenDashboard";
+const DASHBOARD_TITLE: &str = "Usage Monitor Pro";
+const DASHBOARD_MUTEX: &str = "Local\\ClaudeCodeUsageMonitorProDashboard";
+const DASHBOARD_REQUEST_EVENT: &str = "Local\\ClaudeCodeUsageMonitorProOpenDashboard";
 
 fn language() -> crate::localization::LanguageId {
     let settings = crate::app_settings::load_settings();

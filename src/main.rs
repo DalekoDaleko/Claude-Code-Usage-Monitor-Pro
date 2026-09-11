@@ -40,6 +40,10 @@ fn main() {
         }
     }
 
+    // Before anything reads settings, and in every mode: the widget, the
+    // dashboard and the studio all load from the same folder.
+    app_settings::migrate_from_original_settings();
+
     if studio_app::handle_cli_mode(&args) {
         return;
     }
