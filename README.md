@@ -69,7 +69,7 @@ In the default theme, left-click a provider tray icon to show or hide the widget
 
 | Provider | Setup |
 | --- | --- |
-| Claude Code | Sign in with the Claude Code CLI or desktop app. Windows and WSL credentials are detected automatically. |
+| Claude Code | Sign in with the Claude Code CLI or the Claude desktop app, installed from claude.ai or the Microsoft Store. Windows and WSL credentials are detected automatically. |
 | Codex | Install and sign in to the Codex CLI, then enable Codex in **Providers**. |
 | Google Antigravity | Sign in to Antigravity, then enable it in **Providers**. |
 | OpenCode Go | Connect an OpenCode Go account, configure the credentials described below, then enable OpenCode in **Providers**. |
@@ -229,6 +229,19 @@ application buttons and the "..." overflow button, making them unreachable.
   user's own CLI session to refresh the credentials file, at which point the existing credential
   watcher resumes polling automatically.
 - The setting defaults to **on**, so upgrading changes nothing until you choose otherwise.
+- A valid Claude token from any source is used before anything is refreshed. Upstream stopped at the
+  first sign-in it found: an expired `~/.claude/.credentials.json` hid a current token kept by the
+  Claude desktop app, and with refresh on it would spend quota on `claude -p .` instead of using it.
+- The Claude desktop app's token is also found when the app was installed from the **Microsoft
+  Store**. Windows keeps a Store app's AppData in its package folder
+  (`%LOCALAPPDATA%\Packages\Claude_<publisher id>\LocalCache\Roaming\Claude`), where upstream never
+  looked, so Store users had to keep a separate Claude Code CLI login fresh.
+- Of the several tokens the desktop app keeps, the one chosen now carries both the `user:inference`
+  and `user:profile` scopes. Upstream picked the latest-expiring inference token, which can be one
+  without `user:profile`; the usage endpoint refuses that with 403.
+- WSL is left alone on PCs without it. Upstream started `wsl.exe` to list Linux distros whenever no
+  Windows-side Claude token was usable; the monitor now first checks the registry, where WSL records
+  each installed distro, and skips the WSL path entirely when there are none.
 
 ### Stale readings
 

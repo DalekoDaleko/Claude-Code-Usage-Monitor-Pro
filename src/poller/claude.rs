@@ -4,6 +4,11 @@ use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
+use windows::core::{w, PCWSTR, PWSTR};
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+    RRF_RT_REG_SZ,
+};
 
 use super::claude_desktop;
 use super::{
@@ -73,16 +78,7 @@ enum CredentialSource {
 }
 
 pub(super) fn poll_claude_code() -> Result<UsageData, PollError> {
-    let creds = match read_first_credentials() {
-        Some(c) => c,
-        None => {
-            diagnose::log("poll failed: no Claude credentials found");
-            return Err(PollError::NoCredentials);
-        }
-    };
-
-    let creds = refresh_or_fallback(creds)?;
-
+    let creds = resolve_credentials()?;
     fetch_usage_with_fallback(&creds.access_token)
 }
 
@@ -314,9 +310,20 @@ pub(super) fn credential_watch_snapshot(all_sources: bool) -> Vec<String> {
     let sources = if all_sources {
         all_known_credential_sources()
     } else {
-        read_first_credentials()
-            .map(|credentials| vec![credentials.source])
-            .unwrap_or_else(all_known_credential_sources)
+        // Watch every source the last choice was made from: when they were
+        // all expired, a renewal by any one of them should resume polling.
+        let scan = scan_sources(
+            credential_sources_in_order(),
+            read_credentials_from_source,
+            now_ms(),
+        );
+        let mut sources = scan.expired;
+        sources.extend(scan.chosen.map(|credentials| credentials.source));
+        if sources.is_empty() {
+            all_known_credential_sources()
+        } else {
+            sources
+        }
     };
 
     let mut snapshot: Vec<String> = sources
@@ -328,26 +335,76 @@ pub(super) fn credential_watch_snapshot(all_sources: bool) -> Vec<String> {
     snapshot
 }
 
-fn refresh_or_fallback(mut credentials: Credentials) -> Result<Credentials, PollError> {
-    loop {
-        if !is_token_expired(credentials.expires_at) {
-            return Ok(credentials);
-        }
+/// The outcome of reading the credential sources in order.
+struct SourceScan {
+    /// The first source holding a token that has not expired.
+    chosen: Option<Credentials>,
+    /// Sources read before it whose token had expired, in order.
+    expired: Vec<CredentialSource>,
+}
 
-        let source = credentials.source.clone();
-        if !super::active_token_refresh_enabled() {
-            // Passive mode: the user's own CLI session renews the token, and the
-            // credential watcher resumes polling once the file changes. Starting
-            // `claude -p .` here would be a real API call that spends the very
-            // quota this tool reports.
-            diagnose::log(format!(
-                "credentials from {source:?} are expired and active token refresh is off; waiting for a user login"
-            ));
-            return Err(PollError::TokenExpired);
+/// Read sources in order until one holds an unexpired token. Sources after it
+/// are not read, so a later, costlier source (WSL) is only probed when every
+/// earlier one is missing or expired.
+fn scan_sources(
+    sources: impl IntoIterator<Item = CredentialSource>,
+    mut read: impl FnMut(&CredentialSource) -> Option<Credentials>,
+    now_ms: i64,
+) -> SourceScan {
+    let mut expired = Vec::new();
+    for source in sources {
+        let Some(credentials) = read(&source) else {
+            continue;
+        };
+        if !expired_at(credentials.expires_at, now_ms) {
+            return SourceScan {
+                chosen: Some(credentials),
+                expired,
+            };
         }
-        cli_refresh_token(&source);
+        expired.push(source);
+    }
+    SourceScan {
+        chosen: None,
+        expired,
+    }
+}
 
-        match read_credentials_from_source(&source) {
+/// Choose the token to poll with. A valid token from any source is used before
+/// anything is refreshed: reading a saved token costs nothing, whereas a
+/// refresh starts `claude -p .`, a real request that spends the very quota
+/// this tool reports. So an expired Claude Code login does not hide a current
+/// one kept by the Claude desktop app, and the other way round.
+fn resolve_credentials() -> Result<Credentials, PollError> {
+    let scan = scan_sources(
+        credential_sources_in_order(),
+        read_credentials_from_source,
+        now_ms(),
+    );
+    for source in &scan.expired {
+        diagnose::log(format!("credentials from {source:?} are expired"));
+    }
+    if let Some(credentials) = scan.chosen {
+        if !scan.expired.is_empty() {
+            diagnose::log(format!("using credentials from {:?}", credentials.source));
+        }
+        return Ok(credentials);
+    }
+    if scan.expired.is_empty() {
+        diagnose::log("poll failed: no Claude credentials found");
+        return Err(PollError::NoCredentials);
+    }
+    if !super::active_token_refresh_enabled() {
+        // Passive mode: the user's own Claude session renews a token, and the
+        // credential watcher resumes polling once any of these sources changes.
+        diagnose::log(
+            "every Claude credential found is expired and active token refresh is off; waiting for a user login",
+        );
+        return Err(PollError::TokenExpired);
+    }
+    for source in &scan.expired {
+        cli_refresh_token(source);
+        match read_credentials_from_source(source) {
             Some(refreshed) if !is_token_expired(refreshed.expires_at) => return Ok(refreshed),
             Some(_) => diagnose::log(format!(
                 "credentials from {source:?} still expired after refresh attempt"
@@ -356,12 +413,8 @@ fn refresh_or_fallback(mut credentials: Credentials) -> Result<Credentials, Poll
                 "credentials from {source:?} unavailable after refresh attempt"
             )),
         }
-
-        match read_next_credentials_after(&source) {
-            Some(next) => credentials = next,
-            None => return Err(PollError::TokenExpired),
-        }
     }
+    Err(PollError::TokenExpired)
 }
 
 fn cli_refresh_token(source: &CredentialSource) {
@@ -511,10 +564,6 @@ fn bundled_claude_version(path: &Path) -> Option<Vec<u64>> {
         .ok()
 }
 
-fn read_first_credentials() -> Option<Credentials> {
-    credential_sources_in_order().find_map(|source| read_credentials_from_source(&source))
-}
-
 fn read_windows_credentials(path: &Path) -> Option<Credentials> {
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
@@ -533,7 +582,6 @@ fn read_windows_credentials(path: &Path) -> Option<Credentials> {
 
 fn read_desktop_app_credentials(path: &Path) -> Option<Credentials> {
     let token = claude_desktop::read_token(path)?;
-    diagnose::log("using the Claude desktop app token cache");
     Some(Credentials {
         access_token: token.access_token,
         expires_at: token.expires_at,
@@ -591,19 +639,12 @@ fn parse_credentials(content: &str, source: CredentialSource) -> Option<Credenti
     })
 }
 
-fn read_next_credentials_after(source: &CredentialSource) -> Option<Credentials> {
-    credential_sources_in_order()
-        .skip_while(|candidate| candidate != source)
-        .skip(1)
-        .find_map(|candidate| read_credentials_from_source(&candidate))
-}
-
 /// Credential sources, cheapest first. The WSL probe stays lazy so a machine
 /// that resolves a token locally never has to spawn `wsl.exe`.
 fn credential_sources_in_order() -> impl Iterator<Item = CredentialSource> {
     windows_credential_source()
         .into_iter()
-        .chain(desktop_app_credential_source())
+        .chain(desktop_app_credential_sources())
         .chain(
             std::iter::once_with(list_wsl_distros)
                 .flatten()
@@ -621,8 +662,13 @@ fn windows_credential_source() -> Option<CredentialSource> {
     ))
 }
 
-fn desktop_app_credential_source() -> Option<CredentialSource> {
-    claude_desktop::config_path().map(CredentialSource::DesktopApp)
+/// One source per place the desktop app may keep its token: the claude.ai
+/// installer's folder and any Microsoft Store package folder.
+fn desktop_app_credential_sources() -> Vec<CredentialSource> {
+    claude_desktop::config_paths()
+        .into_iter()
+        .map(CredentialSource::DesktopApp)
+        .collect()
 }
 
 fn credential_watch_signature(source: &CredentialSource) -> Option<String> {
@@ -673,7 +719,71 @@ fn wsl_credential_watch_signature(distro: &str) -> Option<String> {
     Some(format!("wsl:{distro}|{state}"))
 }
 
+/// Where WSL registers each distro installed for the current Windows user.
+const WSL_REGISTRY_PATH: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Lxss");
+
+/// True when this Windows user has at least one WSL distro. WSL records each
+/// as a subkey of [`WSL_REGISTRY_PATH`] holding a `DistributionName` value;
+/// other subkeys WSL keeps there, such as its installer cache, have none. So
+/// this is known from the registry, without starting `wsl.exe`.
+fn wsl_distros_registered() -> bool {
+    any_subkey_has_string_value(HKEY_CURRENT_USER, WSL_REGISTRY_PATH, w!("DistributionName"))
+}
+
+/// Read-only: whether any direct subkey of `root\path` has the string value
+/// `value`. A missing key counts as having none.
+fn any_subkey_has_string_value(root: HKEY, path: PCWSTR, value: PCWSTR) -> bool {
+    let mut key = HKEY::default();
+    if unsafe { RegOpenKeyExW(root, path, None, KEY_READ, &mut key) }.is_err() {
+        return false;
+    }
+    let mut found = false;
+    for index in 0.. {
+        // Registry key names are at most 255 characters.
+        let mut name = [0u16; 256];
+        let mut length = name.len() as u32;
+        let listed = unsafe {
+            RegEnumKeyExW(
+                key,
+                index,
+                Some(PWSTR(name.as_mut_ptr())),
+                &mut length,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        // ERROR_NO_MORE_ITEMS ends the list; any other error ends it too.
+        if listed.is_err() {
+            break;
+        }
+        let present = unsafe {
+            RegGetValueW(
+                key,
+                PCWSTR::from_raw(name.as_ptr()),
+                value,
+                RRF_RT_REG_SZ,
+                None,
+                None,
+                None,
+            )
+        };
+        if present.is_ok() {
+            found = true;
+            break;
+        }
+    }
+    let _ = unsafe { RegCloseKey(key) };
+    found
+}
+
 fn list_wsl_distros() -> Vec<String> {
+    // Most Windows users have no WSL distro at all; for them the WSL path is
+    // skipped entirely and `wsl.exe` is never started.
+    if !wsl_distros_registered() {
+        return Vec::new();
+    }
     let output = match run_with_timeout(
         Command::new("wsl.exe")
             .args(["-l", "-q"])
@@ -731,14 +841,20 @@ fn looks_like_utf16le(bytes: &[u8]) -> bool {
             >= units
 }
 
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+/// A token with no expiry time is treated as current.
+fn expired_at(expires_at: Option<i64>, now_ms: i64) -> bool {
+    expires_at.is_some_and(|expires_at| now_ms >= expires_at)
+}
+
 fn is_token_expired(expires_at: Option<i64>) -> bool {
-    expires_at.is_some_and(|expires_at| {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-        now >= expires_at
-    })
+    expired_at(expires_at, now_ms())
 }
 
 fn run_with_timeout(command: &mut Command, timeout: Duration) -> Option<std::process::Output> {
@@ -777,6 +893,127 @@ fn wait_for_refresh(child: &mut std::process::Child) {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    const NOW: i64 = 1_800_000_000_000;
+
+    fn cli() -> CredentialSource {
+        CredentialSource::Windows(PathBuf::from(r"C:\Users\me\.claude\.credentials.json"))
+    }
+
+    fn installer_app() -> CredentialSource {
+        CredentialSource::DesktopApp(PathBuf::from(
+            r"C:\Users\me\AppData\Roaming\Claude\config.json",
+        ))
+    }
+
+    fn store_app() -> CredentialSource {
+        CredentialSource::DesktopApp(PathBuf::from(
+            r"C:\Users\me\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\config.json",
+        ))
+    }
+
+    fn wsl() -> CredentialSource {
+        CredentialSource::Wsl {
+            distro: "Ubuntu".into(),
+        }
+    }
+
+    fn token(source: &CredentialSource, expires_at: Option<i64>) -> Option<Credentials> {
+        Some(Credentials {
+            access_token: format!("token-for-{source:?}"),
+            expires_at,
+            source: source.clone(),
+        })
+    }
+
+    #[test]
+    fn an_expired_cli_login_does_not_hide_a_current_desktop_token() {
+        let scan = scan_sources(
+            [cli(), installer_app(), store_app(), wsl()],
+            |source| match source {
+                source if *source == cli() => token(source, Some(NOW - 1)),
+                source if *source == installer_app() => None,
+                source if *source == store_app() => token(source, Some(NOW + 60_000)),
+                _ => panic!("WSL must not be probed once a current token is found"),
+            },
+            NOW,
+        );
+        assert_eq!(
+            scan.chosen.map(|credentials| credentials.source),
+            Some(store_app())
+        );
+        assert_eq!(scan.expired, vec![cli()]);
+    }
+
+    #[test]
+    fn a_current_first_source_is_used_without_reading_the_rest() {
+        let mut read = Vec::new();
+        let scan = scan_sources(
+            [cli(), store_app(), wsl()],
+            |source| {
+                read.push(source.clone());
+                token(source, Some(NOW + 1))
+            },
+            NOW,
+        );
+        assert_eq!(
+            scan.chosen.map(|credentials| credentials.source),
+            Some(cli())
+        );
+        assert!(scan.expired.is_empty());
+        assert_eq!(read, vec![cli()]);
+    }
+
+    #[test]
+    fn when_every_token_is_expired_each_source_is_reported_in_order() {
+        let scan = scan_sources(
+            [cli(), installer_app(), store_app(), wsl()],
+            |source| match source {
+                source if *source == installer_app() => None,
+                // Expiring exactly now counts as expired.
+                source => token(source, Some(NOW)),
+            },
+            NOW,
+        );
+        assert!(scan.chosen.is_none());
+        assert_eq!(scan.expired, vec![cli(), store_app(), wsl()]);
+    }
+
+    #[test]
+    fn a_token_without_an_expiry_time_counts_as_current() {
+        let scan = scan_sources([cli()], |source| token(source, None), NOW);
+        assert_eq!(
+            scan.chosen.map(|credentials| credentials.source),
+            Some(cli())
+        );
+    }
+
+    // Read-only registry checks against keys every Windows installation has:
+    // each Windows service is a subkey of `Services`, most with a DisplayName.
+    #[test]
+    fn finds_a_string_value_held_by_any_subkey() {
+        use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+        let services = w!(r"SYSTEM\CurrentControlSet\Services");
+        assert!(any_subkey_has_string_value(
+            HKEY_LOCAL_MACHINE,
+            services,
+            w!("DisplayName")
+        ));
+        assert!(!any_subkey_has_string_value(
+            HKEY_LOCAL_MACHINE,
+            services,
+            w!("CcumProNoSuchValue")
+        ));
+    }
+
+    #[test]
+    fn a_missing_registry_key_has_no_subkeys() {
+        assert!(!any_subkey_has_string_value(
+            HKEY_CURRENT_USER,
+            w!(r"Software\CcumProNoSuchKey\Lxss"),
+            w!("DistributionName")
+        ));
+    }
 
     #[test]
     fn bundled_claude_versions_sort_numerically() {

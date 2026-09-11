@@ -21,9 +21,12 @@ const DPAPI_KEY_PREFIX: &[u8] = b"DPAPI";
 const OS_CRYPT_PREFIX: &[u8] = b"v10";
 const GCM_NONCE_LEN: usize = 12;
 const GCM_TAG_LEN: usize = 16;
-/// Desktop entries are keyed `"<install>:<user>:<base url>:<scopes>"`; the
-/// inference scope marks the token the usage endpoint accepts.
+/// Desktop entries are keyed `"<ids>:<base url>:<scope> <scope> …"`, and the
+/// app keeps several tokens with different scopes. The usage endpoint needs
+/// both of these, as Claude Code's own token has; a token with the inference
+/// scope alone is refused with 403.
 const INFERENCE_SCOPE: &str = "user:inference";
+const PROFILE_SCOPE: &str = "user:profile";
 const BCRYPT_INIT_AUTH_MODE_INFO_VERSION: u32 = 1;
 
 pub(super) struct DesktopToken {
@@ -31,8 +34,73 @@ pub(super) struct DesktopToken {
     pub(super) expires_at: Option<i64>,
 }
 
-pub(super) fn config_path() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("Claude").join("config.json"))
+/// The Microsoft Store build is the MSIX package `Claude_<publisher id>`.
+const STORE_PACKAGE_PREFIX: &str = "Claude_";
+/// Publisher id of the certificate Anthropic signs the Store package with.
+const ANTHROPIC_PUBLISHER_ID: &str = "pzs8sxrjxfjjc";
+/// Windows derives every publisher id as 13 characters of lowercase base32.
+const PUBLISHER_ID_LEN: usize = 13;
+
+/// Folders the Claude desktop app may keep its data in, most likely first.
+///
+/// The installer from claude.ai uses `%APPDATA%\Claude`. The Microsoft Store
+/// build is an MSIX package, and Windows redirects that app's writes to AppData
+/// into the package's own folder,
+/// `%LOCALAPPDATA%\Packages\Claude_<publisher id>\LocalCache\Roaming\Claude`,
+/// which the app itself still sees as `%APPDATA%\Claude`. Both layouts are the
+/// same inside, and a machine can have both, for instance after switching from
+/// one build to the other, so every one found is returned.
+pub(super) fn data_directories() -> Vec<PathBuf> {
+    data_directories_in(
+        dirs::config_dir().as_deref(),
+        dirs::data_local_dir().as_deref(),
+    )
+}
+
+fn data_directories_in(roaming: Option<&Path>, local: Option<&Path>) -> Vec<PathBuf> {
+    let mut directories: Vec<PathBuf> = roaming
+        .map(|roaming| roaming.join("Claude"))
+        .into_iter()
+        .collect();
+    let Some(packages) = local.map(|local| local.join("Packages")) else {
+        return directories;
+    };
+    let mut names: Vec<String> = std::fs::read_dir(&packages)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| is_store_package(name))
+        .collect();
+    // Anthropic's own package first, then any other in a stable order.
+    names.sort_by_key(|name| (!name.ends_with(ANTHROPIC_PUBLISHER_ID), name.clone()));
+    directories.extend(names.into_iter().map(|name| {
+        packages
+            .join(name)
+            .join("LocalCache")
+            .join("Roaming")
+            .join("Claude")
+    }));
+    directories
+}
+
+fn is_store_package(name: &str) -> bool {
+    name.strip_prefix(STORE_PACKAGE_PREFIX)
+        .is_some_and(|publisher_id| {
+            publisher_id.len() == PUBLISHER_ID_LEN
+                && publisher_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+}
+
+/// Every place a desktop-app token cache may be, in [`data_directories`] order.
+pub(super) fn config_paths() -> Vec<PathBuf> {
+    data_directories()
+        .into_iter()
+        .map(|directory| directory.join("config.json"))
+        .collect()
 }
 
 fn local_state_path(config_path: &Path) -> PathBuf {
@@ -86,13 +154,15 @@ fn token_cache_value(config: &str) -> Option<String> {
     Some(json.get(TOKEN_CACHE_KEY)?.as_str()?.to_string())
 }
 
-/// Picks the freshest entry that carries the inference scope, falling back to
-/// the freshest entry of any scope so a future key layout still resolves.
+/// Picks the freshest entry carrying both the inference and the profile scope,
+/// which the usage endpoint needs. Failing that, the freshest with the
+/// inference scope, then the freshest of any scope, so a future key layout
+/// still resolves to something.
 fn select_token(plaintext: &str) -> Option<DesktopToken> {
     let json: serde_json::Value = serde_json::from_str(plaintext).ok()?;
     let entries = json.as_object()?;
 
-    let mut best: Option<(bool, i64, DesktopToken)> = None;
+    let mut best: Option<((bool, bool, i64), DesktopToken)> = None;
     for (key, entry) in entries {
         let Some(access_token) = entry.get("token").and_then(|value| value.as_str()) else {
             continue;
@@ -101,19 +171,21 @@ fn select_token(plaintext: &str) -> Option<DesktopToken> {
             continue;
         }
         let expires_at = entry.get("expiresAt").and_then(|value| value.as_i64());
+        let scopes = entry_scopes(key);
+        let inference = scopes.contains(&INFERENCE_SCOPE);
         let rank = (
-            key.contains(INFERENCE_SCOPE),
+            inference && scopes.contains(&PROFILE_SCOPE),
+            inference,
             expires_at.unwrap_or(i64::MIN),
         );
         if best
             .as_ref()
-            .is_some_and(|(scoped, expiry, _)| (*scoped, *expiry) >= rank)
+            .is_some_and(|(best_rank, _)| *best_rank >= rank)
         {
             continue;
         }
         best = Some((
-            rank.0,
-            rank.1,
+            rank,
             DesktopToken {
                 access_token: access_token.to_string(),
                 expires_at,
@@ -121,7 +193,24 @@ fn select_token(plaintext: &str) -> Option<DesktopToken> {
         ));
     }
 
-    best.map(|(_, _, token)| token)
+    best.map(|(_, token)| token)
+}
+
+/// The scopes at the end of a cache key, `"<ids>:<base url>:<scope> <scope> …"`.
+/// Every scope has the form `<kind>:<name>`, so the first one is the last two
+/// `:`-separated parts of the first word, and the rest are whole words.
+fn entry_scopes(key: &str) -> Vec<&str> {
+    let mut words = key.split(' ');
+    let first = words.next().unwrap_or_default();
+    let first_scope = first
+        .rmatch_indices(':')
+        .nth(1)
+        .map(|(index, _)| &first[index + 1..]);
+    first_scope
+        .into_iter()
+        .chain(words)
+        .filter(|scope| !scope.is_empty())
+        .collect()
 }
 
 fn os_crypt_key(local_state_path: &Path) -> Option<Vec<u8>> {
@@ -448,15 +537,124 @@ mod tests {
     }
 
     /// Ignored by default: this one proves the real DPAPI + AES-GCM path
-    /// against whatever the Claude desktop app has on the current machine.
+    /// against whatever the Claude desktop app has on the current machine,
+    /// whether it was installed from claude.ai or from the Microsoft Store.
     /// Run it with `cargo test -- --ignored` while signed in to the app.
     #[test]
     #[ignore = "requires a signed-in Claude desktop app on this machine"]
     fn reads_a_token_from_the_installed_desktop_app() {
-        let path = config_path().expect("a roaming config directory");
-        let token = read_token(&path).expect("the desktop app should expose a token");
+        let token = config_paths()
+            .iter()
+            .filter(|path| path.is_file())
+            .find_map(|path| read_token(path))
+            .expect("the desktop app should expose a token");
+        // Never print the token: check its shape only.
         assert!(token.access_token.starts_with("sk-ant-"));
         assert!(token.expires_at.unwrap_or_default() > 0);
+    }
+
+    /// The layout the desktop app actually keeps: several long-lived tokens,
+    /// and the one expiring last has only the inference scope, which the
+    /// usage endpoint refuses.
+    #[test]
+    fn prefers_a_token_the_usage_endpoint_accepts_over_a_later_one() {
+        let plaintext = r#"{
+            "org:account:https://api.anthropic.com:user:inference": {
+                "token": "inference-only", "expiresAt": 1820129204645
+            },
+            "org:account:https://api.anthropic.com:user:inference user:office": {
+                "token": "office", "expiresAt": 1819522154267
+            },
+            "org:account:https://api.anthropic.com:user:inference user:file_upload user:profile": {
+                "token": "usage-capable", "expiresAt": 1819578528760, "refreshToken": "r"
+            },
+            "org2:account:https://api.anthropic.com:user:inference user:file_upload user:profile": {
+                "token": "usage-capable-older", "expiresAt": 1819523090835
+            }
+        }"#;
+        let token = select_token(plaintext).expect("a token should be selected");
+        assert_eq!(token.access_token, "usage-capable");
+    }
+
+    #[test]
+    fn falls_back_to_an_inference_token_when_none_has_the_profile_scope() {
+        let plaintext = r#"{
+            "org:account:https://api.anthropic.com:user:profile": {
+                "token": "profile-only", "expiresAt": 9000000000000
+            },
+            "org:account:https://api.anthropic.com:user:inference": {
+                "token": "inference", "expiresAt": 1
+            }
+        }"#;
+        assert_eq!(select_token(plaintext).unwrap().access_token, "inference");
+    }
+
+    #[test]
+    fn scopes_are_read_exactly_from_the_end_of_a_cache_key() {
+        assert_eq!(
+            entry_scopes("org:account:https://api.anthropic.com:user:inference user:profile"),
+            ["user:inference", "user:profile"]
+        );
+        assert_eq!(
+            entry_scopes("install:user:https://api.anthropic.com:user:inference"),
+            ["user:inference"]
+        );
+        // A look-alike is not the scope it resembles.
+        assert!(!entry_scopes(
+            "org:account:https://api.anthropic.com:user:inference_v2 user:profiles"
+        )
+        .iter()
+        .any(|scope| *scope == INFERENCE_SCOPE || *scope == PROFILE_SCOPE));
+        assert!(entry_scopes("").is_empty());
+    }
+
+    #[test]
+    fn finds_both_the_installer_and_the_store_data_folders() {
+        let root = std::env::temp_dir().join(format!(
+            "ccum-pro-claude-desktop-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let roaming = root.join("Roaming");
+        let local = root.join("Local");
+        for name in [
+            "Claude_pzs8sxrjxfjjc",
+            "Claude_0123456789abc",
+            // Not the Store package: wrong prefix, id length or characters.
+            "ClaudeHelper_pzs8sxrjxfjjc",
+            "Claude_short",
+            "Claude_PZS8SXRJXFJJC",
+            "Other_pzs8sxrjxfjjc",
+        ] {
+            std::fs::create_dir_all(local.join("Packages").join(name)).unwrap();
+        }
+        // A well-formed name that is a file, not a package folder.
+        std::fs::write(local.join("Packages").join("Claude_f1le000000000"), b"").unwrap();
+
+        let store = |name: &str| {
+            local
+                .join("Packages")
+                .join(name)
+                .join("LocalCache")
+                .join("Roaming")
+                .join("Claude")
+        };
+        assert_eq!(
+            data_directories_in(Some(&roaming), Some(&local)),
+            vec![
+                roaming.join("Claude"),
+                store("Claude_pzs8sxrjxfjjc"),
+                store("Claude_0123456789abc"),
+            ]
+        );
+        assert_eq!(
+            data_directories_in(None, Some(&root.join("no-such-folder"))),
+            Vec::<PathBuf>::new()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
