@@ -622,7 +622,7 @@ fn tray_icon_tooltip_from_state() -> String {
         lock_state()
             .as_ref()
             .map(|state| state.language.strings().window_title.to_string())
-            .unwrap_or_else(|| "Claude Code Usage Monitor".to_string())
+            .unwrap_or_else(|| "Claude Code Usage Monitor Pro".to_string())
     })
 }
 

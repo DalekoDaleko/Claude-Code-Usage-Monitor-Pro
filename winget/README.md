@@ -52,5 +52,5 @@ without the secret that job logs a warning and skips, which is why it currently 
 `InstallerSha256` must match the published asset exactly:
 
 ```powershell
-(Get-FileHash .\claude-code-usage-monitor.exe -Algorithm SHA256).Hash
+(Get-FileHash .\claude-code-usage-monitor-pro.exe -Algorithm SHA256).Hash
 ```

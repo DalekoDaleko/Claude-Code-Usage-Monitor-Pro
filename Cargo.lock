@@ -257,7 +257,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-code-usage-monitor"
+name = "claude-code-usage-monitor-pro"
 version = "2.11.0"
 dependencies = [
  "dirs",

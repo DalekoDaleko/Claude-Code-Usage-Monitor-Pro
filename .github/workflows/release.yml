@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  RELEASE_ASSET_NAME: claude-code-usage-monitor.exe
+  RELEASE_ASSET_NAME: claude-code-usage-monitor-pro.exe
   WINGET_PACKAGE_ID: DalekoDaleko.ClaudeCodeUsageMonitorPro
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/claude-code-usage-monitor.exe
+          files: target/release/claude-code-usage-monitor-pro.exe
           generate_release_notes: true
 
   winget:

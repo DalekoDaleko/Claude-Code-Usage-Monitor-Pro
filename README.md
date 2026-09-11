@@ -51,13 +51,13 @@ or download `claude-code-usage-monitor.exe` from the upstream
 Start the monitor:
 
 ```powershell
-claude-code-usage-monitor
+claude-code-usage-monitor-pro
 ```
 
 Open the settings dashboard directly:
 
 ```powershell
-claude-code-usage-monitor --dashboard
+claude-code-usage-monitor-pro --dashboard
 ```
 
 Use the dashboard to select providers, change the refresh interval, choose a display, enable startup, or customize the widget. **Settings > Display > Usage direction** switches the default theme and other themes that support this setting between showing what has been used and what is left, with Used as the default. Selecting Remaining makes a fresh limit read 100% and drain as you work.
@@ -100,10 +100,10 @@ Credentials are read without modifying the provider files that contain them. Ope
 Run diagnostics with:
 
 ```powershell
-claude-code-usage-monitor --diagnose
+claude-code-usage-monitor-pro --diagnose
 ```
 
-The diagnostic log is written to `%TEMP%\claude-code-usage-monitor.log`. Application settings are stored in `%APPDATA%\ClaudeCodeUsageMonitor\settings.json`.
+The diagnostic log is written to `%TEMP%\claude-code-usage-monitor-pro.log`. Application settings are stored in `%APPDATA%\ClaudeCodeUsageMonitorPro\settings.json`, separate from the original application's folder so both can be installed side by side. On first run, settings are copied from `%APPDATA%\ClaudeCodeUsageMonitor` if that folder exists; the original is left untouched.
 
 ## Build from source
 
@@ -113,7 +113,7 @@ Install [Rust](https://www.rust-lang.org/tools/install) 1.95 or later, then run:
 cargo build --release
 ```
 
-The executable will be created at `target\release\claude-code-usage-monitor.exe`.
+The executable will be created at `target\release\claude-code-usage-monitor-pro.exe`.
 
 ## Changes in this fork
 
