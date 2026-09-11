@@ -1,7 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use serde::Deserialize;
 
@@ -9,6 +9,7 @@ use super::windows_credentials;
 use super::{build_agent, parse_iso8601, PollError};
 use crate::diagnose;
 use crate::models::{UsageData, UsageSection};
+use crate::winsqlite::ReadMode;
 
 const CURSOR_USAGE_SUMMARY_URL: &str = "https://cursor.com/api/usage-summary";
 /// Optional session-cookie override. Must hold the output of
@@ -151,46 +152,32 @@ fn cursor_state_db_path() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// Read Cursor's access token from its own state database, in place. While
+/// Cursor holds a write lock the database is read again without locking,
+/// rather than copied: a copy would duplicate everything Cursor stores there
+/// and could be left behind if the process stopped before deleting it.
 fn read_cursor_access_token_from_state_db() -> Option<String> {
     let path = cursor_state_db_path()?;
-    match query_cursor_access_token(&path) {
-        Ok(token) => token,
-        Err(error) => {
-            diagnose::log(format!(
-                "Cursor state DB direct read failed ({error}); retrying via temp copy"
-            ));
-            query_cursor_access_token_from_copy(&path)
+    let result = match query_cursor_access_token(&path, ReadMode::Locking) {
+        Err(error) if error.is_busy() => {
+            diagnose::log("Cursor state DB is locked by Cursor; reading it without locking");
+            query_cursor_access_token(&path, ReadMode::Immutable)
         }
-    }
+        result => result,
+    };
+    result
+        .map_err(|error| diagnose::log(format!("Cursor state DB read failed: {error}")))
+        .ok()
+        .flatten()
 }
 
-fn query_cursor_access_token_from_copy(path: &Path) -> Option<String> {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temporary = std::env::temp_dir().join(format!(
-        "claude-monitor-cursor-state-{}-{unique}.vscdb",
-        std::process::id()
-    ));
-    if let Err(error) = std::fs::copy(path, &temporary) {
-        diagnose::log(format!("Cursor state DB temp copy failed: {error}"));
-        return None;
-    }
-    let result = query_cursor_access_token(&temporary);
-    let _ = std::fs::remove_file(&temporary);
-    match result {
-        Ok(token) => token,
-        Err(error) => {
-            diagnose::log(format!("Cursor state DB temp-copy read failed: {error}"));
-            None
-        }
-    }
-}
-
-fn query_cursor_access_token(path: &Path) -> Result<Option<String>, crate::winsqlite::Error> {
+fn query_cursor_access_token(
+    path: &Path,
+    mode: ReadMode,
+) -> Result<Option<String>, crate::winsqlite::Error> {
     crate::winsqlite::query_optional_text(
         path,
+        mode,
         "SELECT value FROM ItemTable WHERE key = ?1",
         CURSOR_ACCESS_TOKEN_KEY,
     )

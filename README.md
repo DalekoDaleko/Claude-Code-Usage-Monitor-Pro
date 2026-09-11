@@ -287,6 +287,12 @@ application buttons and the "..." overflow button, making them unreachable.
   `VCRUNTIME140.dll`, which belongs to the Visual C++ Redistributable rather than to Windows. On a PC
   without that redistributable, the upstream build cannot start at all (`STATUS_DLL_NOT_FOUND`,
   `0xC0000135`); this build needs only DLLs that ship with Windows 10 and 11.
+- **Cursor's state database is no longer copied.** When Cursor held a lock on
+  `%APPDATA%\Cursor\User\globalStorage\state.vscdb`, upstream copied the whole database, which holds
+  everything Cursor stores, to `%TEMP%`, read the token from the copy and deleted it, ignoring a
+  failed delete. The database is now always read in place: normally with SQLite's shared lock, and
+  while Cursor holds a write lock, with SQLite's `immutable` option, which takes no lock and writes
+  nothing.
 
 ## Credits
 
