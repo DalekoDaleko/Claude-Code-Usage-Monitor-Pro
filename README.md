@@ -1,9 +1,16 @@
-# Claude Code Usage Monitor
+# Claude Code Usage Monitor Pro
 
 ![Windows](https://img.shields.io/badge/platform-Windows-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A lightweight, open-source Windows taskbar widget for monitoring Claude Code usage limits and reset times. It can also display usage for Codex, Google Antigravity, OpenCode Go, and Cursor.
+
+> **This is an unofficial fork.** The original **Claude Code Usage Monitor** is created and
+> maintained by **Craig Constable** ([Code Zeno Pty Ltd](https://codezeno.com.au)) at
+> [CodeZeno/Claude-Code-Usage-Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor),
+> and all credit for the application belongs to them. This fork only adds the changes listed
+> in [Changes in this fork](#changes-in-this-fork). It is not affiliated with, endorsed by, or
+> supported by Code Zeno Pty Ltd — please report issues with this fork here, not upstream.
 
 ![Claude Code Usage Monitor running in the Windows taskbar](.github/animation.gif)
 
@@ -27,13 +34,17 @@ Claude Code credentials can be detected from the CLI, Claude desktop app, or WSL
 
 ## Installation
 
-Install the latest release with WinGet:
+This fork is not published to WinGet. Build it from source (see
+[Build from source](#build-from-source)).
+
+To install the **original** application instead:
 
 ```powershell
 winget install CodeZeno.ClaudeCodeUsageMonitor
 ```
 
-Alternatively, download `claude-code-usage-monitor.exe` from [GitHub Releases](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases).
+or download `claude-code-usage-monitor.exe` from the upstream
+[GitHub Releases](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases).
 
 ## Usage
 
@@ -104,6 +115,81 @@ cargo build --release
 
 The executable will be created at `target\release\claude-code-usage-monitor.exe`.
 
+## Changes in this fork
+
+Based on upstream **v2.10.23**. Every change below is additive; no existing feature was removed
+except where noted under Security.
+
+### Taskbar placement
+
+Upstream anchors the widget to the left edge of the system tray and grows leftwards, treating the
+whole taskbar as free space. On a full taskbar the widget therefore drew on top of the running
+application buttons and the "..." overflow button, making them unreachable.
+
+- Added `src/taskbar_layout.rs`, which measures the real Windows 11 taskbar through UI Automation.
+  Elements are classified by `AutomationId` (`StartButton`, `Appid:`/`Window:` buttons,
+  `OverflowButton`, `SystemTrayIcon`), so the genuine free gap is known rather than assumed. The
+  legacy `ReBarWindow32` window reports a fixed span on Windows 11 and cannot distinguish a full
+  taskbar from an empty one.
+- When the gap is too small, the widget now floats just above the taskbar instead of overlapping
+  it, snapped by default to the right edge of the screen.
+- The floating widget can be dragged anywhere on screen, and its position persists across restarts
+  (`float_x`/`float_y` in `settings.json`). A 4 px threshold distinguishes a drag from a click, so
+  click actions still work.
+- A floating widget paints an opaque backdrop sampled from the taskbar's own colour, since it no
+  longer has the taskbar behind its transparent pixels. The colour is re-sampled shortly after a
+  theme or accent-colour change, once the shell has repainted.
+- Measurements are cached briefly and invalidated on display, DPI, and setting changes, so
+  UI Automation is not queried on every window move.
+
+### Window behaviour fixes
+
+- `make_popup` now clears `GWLP_HWNDPARENT`. `SetParent(NULL)` leaves the former host as the
+  window's *owner*, and an owned window's z-order is pinned to its owner's, so requesting
+  `HWND_TOPMOST` succeeded while never actually setting `WS_EX_TOPMOST`. This affected any
+  surface that had been taskbar-hosted, not only the new floating mode.
+- Floating surfaces pin their z-order in `WM_WINDOWPOSCHANGING`, so activating another window can
+  no longer push the widget behind it.
+- `apply_custom_theme` re-applies placement after resetting the surface, instead of leaving it
+  stranded at `HWND_NOTOPMOST` until an unrelated event triggered a reposition.
+
+### Token refresh
+
+- Added an **Enable active token refresh** setting (Dashboard, General). Upstream renews an expired
+  token by starting the provider's own CLI (`claude -p .`, `codex exec .`). That is a real API call,
+  so refreshing consumes a little of the quota the tool exists to report.
+- With the setting off, the monitor stays passive: it reports the expired token and waits for the
+  user's own CLI session to refresh the credentials file, at which point the existing credential
+  watcher resumes polling automatically.
+- The setting defaults to **on**, so upgrading changes nothing until you choose otherwise.
+
+### Stale readings
+
+- When a poll fails while figures are still on screen, the widget now renders in greyscale rather
+  than continuing to look live. Upstream showed a single tray balloon and then left the last known
+  numbers on screen indefinitely with no visual indication they had stopped updating.
+
+### Security
+
+- **Removed the portable self-update mechanism.** Upstream downloaded a replacement executable over
+  HTTPS and swapped the running binary with no code-signature or hash verification. WinGet installs
+  still update in place, because WinGet verifies its own packages; portable builds are pointed at the
+  Releases page. The `--apply-update` command-line mode is now rejected rather than honoured, so it
+  can no longer be used as an arbitrary file-overwrite primitive.
+- **Fixed the GitHub link in the dashboard.** It called `Context::open_url`, which is a silent no-op
+  because `eframe` is built with `default-features = false`. It now opens the system browser through
+  `ShellExecuteW`, restricted to `http`/`https` so a user-editable theme or context menu cannot use
+  it to launch a local executable or a registered protocol handler.
+
+## Credits
+
+The original **Claude Code Usage Monitor** is the work of **Craig Constable**
+([Code Zeno Pty Ltd](https://codezeno.com.au)) and its contributors. This fork builds on their
+code, which remains the overwhelming majority of this repository, and is redistributed under the
+same MIT licence with the original copyright notice intact.
+
 ## License
 
-Licensed under the [MIT License](LICENSE).
+Licensed under the [MIT License](LICENSE) — Copyright (c) 2025 Craig Constable.
+
+Modifications in this fork are released under the same licence.

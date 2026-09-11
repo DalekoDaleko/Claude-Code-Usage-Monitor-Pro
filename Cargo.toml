@@ -4,18 +4,24 @@ version = "2.10.23"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
-description = "Claude Code Usage Monitor"
-homepage = "https://codezeno.com.au"
-repository = "https://github.com/CodeZeno/Claude-Code-Usage-Monitor"
+description = "Claude Code Usage Monitor Pro (unofficial fork)"
+homepage = "https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro"
+# The updater derives its GitHub release-check URL from this field, so it must
+# point at this fork rather than upstream.
+repository = "https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro"
 
+# This is an unofficial fork. The executable must not present itself as a build
+# published by Code Zeno Pty Ltd: Windows surfaces CompanyName in file
+# properties and SmartScreen prompts. The MIT copyright notice for the original
+# work is preserved here and in LICENSE.
 [package.metadata.winres]
-CompanyName = "Code Zeno Pty Ltd"
-ProductName = "Claude Code Usage Monitor"
-FileDescription = "Claude Code Usage Monitor"
+CompanyName = "Vitaliy Titov"
+ProductName = "Claude Code Usage Monitor Pro"
+FileDescription = "Claude Code Usage Monitor Pro (unofficial fork)"
 OriginalFilename = "claude-code-usage-monitor.exe"
 InternalName = "ClaudeCodeUsageMonitor"
-Comments = "https://codezeno.com.au"
-LegalCopyright = "Copyright (C) 2026 Code Zeno Pty Ltd"
+Comments = "Unofficial fork of Claude Code Usage Monitor by Craig Constable (Code Zeno Pty Ltd)"
+LegalCopyright = "Copyright (C) 2025 Craig Constable. Fork modifications copyright (C) 2026 Vitaliy Titov. MIT licensed."
 
 [dependencies]
 ureq = { version = "3.4", default-features = false, features = ["native-tls", "json"] }
@@ -36,6 +42,7 @@ features = [
     "Win32_Globalization",
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
+    "Win32_System_Com",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Accessibility",
