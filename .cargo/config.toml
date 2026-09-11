@@ -1,0 +1,13 @@
+# Link the C runtime into the executable instead of loading it from DLLs.
+#
+# By default a Rust build for the MSVC target imports VCRUNTIME140.dll, the
+# Visual C++ runtime, which is not part of Windows. On a PC without the Visual
+# C++ Redistributable the program cannot start at all: Windows reports
+# STATUS_DLL_NOT_FOUND (0xC0000135) before any of our code runs. That is what
+# stopped the WinGet validation machine from launching the portable exe, and it
+# affects anyone who downloads the exe onto a clean PC.
+#
+# Static linking makes the exe self-contained. This file sits in the repository
+# so local builds and the release workflow build the same way.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

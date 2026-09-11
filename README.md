@@ -283,6 +283,10 @@ application buttons and the "..." overflow button, making them unreachable.
   because `eframe` is built with `default-features = false`. It now opens the system browser through
   `ShellExecuteW`, restricted to `http`/`https` so a user-editable theme or context menu cannot use
   it to launch a local executable or a registered protocol handler.
+- **Self-contained executable.** The C runtime is linked into the exe instead of being loaded from
+  `VCRUNTIME140.dll`, which belongs to the Visual C++ Redistributable rather than to Windows. On a PC
+  without that redistributable, the upstream build cannot start at all (`STATUS_DLL_NOT_FOUND`,
+  `0xC0000135`); this build needs only DLLs that ship with Windows 10 and 11.
 
 ## Credits
 
