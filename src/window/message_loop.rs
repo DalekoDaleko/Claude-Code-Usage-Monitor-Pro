@@ -76,19 +76,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     };
                     match auth_watch {
                         Some((true, watch_mode, previous_snapshot)) => {
-                            let current_snapshot = poller::credential_watch_snapshot(watch_mode);
-                            if current_snapshot != previous_snapshot {
-                                let mut state = lock_state();
-                                if let Some(s) = state.as_mut() {
-                                    if s.auth_error_paused_polling
-                                        && s.auth_watch_mode == watch_mode
-                                    {
-                                        s.auth_watch_snapshot = current_snapshot;
-                                    }
-                                }
-                                drop(state);
-                                request_poll(hwnd);
-                            }
+                            request_credential_watch(hwnd, watch_mode, previous_snapshot);
                         }
                         Some((false, _, _)) => {
                             request_scheduled_poll(hwnd);

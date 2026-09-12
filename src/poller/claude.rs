@@ -807,15 +807,31 @@ fn any_subkey_has_string_value(root: HKEY, path: PCWSTR, value: PCWSTR) -> bool 
     found
 }
 
+/// Distros that belong to a container tool. They are appliances managed by
+/// Docker Desktop, Rancher Desktop or Podman, never somewhere a person signs
+/// in to Claude Code, and reading from one wakes that tool's virtual machine
+/// for nothing. `docker-desktop-data` has no shell at all, so a probe there
+/// only ever runs into the timeout.
+fn is_container_appliance(distro: &str) -> bool {
+    let name = distro.trim().to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "docker-desktop" | "docker-desktop-data" | "rancher-desktop" | "rancher-desktop-data"
+    ) || name.starts_with("podman-machine")
+}
+
 fn list_wsl_distros() -> Vec<String> {
     // Most Windows users have no WSL distro at all; for them the WSL path is
     // skipped entirely and `wsl.exe` is never started.
     if !wsl_distros_registered() {
         return Vec::new();
     }
+    // Only distros that are already running: reading from a stopped one starts
+    // its virtual machine, which takes seconds. A sign-in made inside a distro
+    // is found the next time that distro is up.
     let output = match run_with_timeout(
         Command::new("wsl.exe")
-            .args(["-l", "-q"])
+            .args(["-l", "--running", "-q"])
             .creation_flags(CREATE_NO_WINDOW)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null()),
@@ -830,7 +846,7 @@ fn list_wsl_distros() -> Vec<String> {
     decode_wsl_text(&output.stdout)
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty())
+        .filter(|line| !line.is_empty() && !is_container_appliance(line))
         .map(ToOwned::to_owned)
         .collect()
 }
@@ -1033,6 +1049,30 @@ mod tests {
             services,
             w!("CcumProNoSuchValue")
         ));
+    }
+
+    #[test]
+    fn container_tool_distros_are_not_probed() {
+        for appliance in [
+            "docker-desktop",
+            "docker-desktop-data",
+            "Docker-Desktop",
+            "rancher-desktop",
+            "rancher-desktop-data",
+            "podman-machine-default",
+            " docker-desktop ",
+        ] {
+            assert!(is_container_appliance(appliance), "{appliance}");
+        }
+        for distro in [
+            "Ubuntu",
+            "Ubuntu-24.04",
+            "Debian",
+            "kali-linux",
+            "openSUSE-Tumbleweed",
+        ] {
+            assert!(!is_container_appliance(distro), "{distro}");
+        }
     }
 
     #[test]

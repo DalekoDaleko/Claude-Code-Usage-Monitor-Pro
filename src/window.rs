@@ -212,6 +212,8 @@ static SUPPRESS_TRAY_REPOSITION_UNTIL: Mutex<Option<Instant>> = Mutex::new(None)
 static CURRENT_DPI: AtomicU32 = AtomicU32::new(96);
 static POLL_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static POLL_PENDING: AtomicBool = AtomicBool::new(false);
+/// A credential-watch check is running on a worker thread.
+static AUTH_WATCH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 /// Re-query the monitor DPI for our window and update the cached value.
 /// Uses GetDpiForWindow which returns the live DPI (unlike GetDpiForSystem
@@ -2198,6 +2200,53 @@ fn theme_for_surface(theme: &ThemeDocument, surface_index: usize) -> ThemeDocume
         result.children = surface.children.clone();
     }
     result
+}
+
+/// Look for a change in the watched credential sources, on a worker thread,
+/// and ask for a poll when one has changed.
+///
+/// Never do this on the UI thread: reading a source can take seconds, because
+/// a WSL probe starts a stopped distro, and this window is parented into
+/// Explorer's taskbar. Explorer sends messages to it and waits for the reply,
+/// so a slow UI thread here freezes the taskbar with it.
+fn request_credential_watch(
+    hwnd: HWND,
+    mode: poller::CredentialWatchMode,
+    previous: poller::CredentialWatchSnapshot,
+) {
+    if AUTH_WATCH_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let send_hwnd = SendHwnd::from_hwnd(hwnd);
+    std::thread::spawn(move || {
+        let current = poller::credential_watch_snapshot(mode);
+        let changed = current != previous && {
+            let mut state = lock_state();
+            match state.as_mut() {
+                // Only act while the same wait is still in place; the user may
+                // have signed in, or changed providers, while this ran.
+                Some(s) if s.auth_error_paused_polling && s.auth_watch_mode == mode => {
+                    s.auth_watch_snapshot = current;
+                    true
+                }
+                _ => false,
+            }
+        };
+        AUTH_WATCH_IN_FLIGHT.store(false, Ordering::Release);
+        if changed {
+            unsafe {
+                let _ = PostMessageW(
+                    Some(send_hwnd.to_hwnd()),
+                    WM_APP_REFRESH_NOW,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
+            }
+        }
+    });
 }
 
 fn request_poll(hwnd: HWND) {

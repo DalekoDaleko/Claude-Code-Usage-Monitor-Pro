@@ -246,9 +246,14 @@ application buttons and the "..." overflow button, making them unreachable.
 - Of the several tokens the desktop app keeps, the one chosen now carries both the `user:inference`
   and `user:profile` scopes. Upstream picked the latest-expiring inference token, which can be one
   without `user:profile`; the usage endpoint refuses that with 403.
-- WSL is left alone on PCs without it. Upstream started `wsl.exe` to list Linux distros whenever no
-  Windows-side Claude token was usable; the monitor now first checks the registry, where WSL records
-  each installed distro, and skips the WSL path entirely when there are none.
+- WSL is left alone unless it can help, and never on the UI thread. Upstream started `wsl.exe` to
+  list Linux distros whenever no Windows-side Claude token was usable, probed each one with a
+  five-second timeout, and did so from the window procedure while waiting for a new sign-in. Since
+  this widget is parented into Explorer's taskbar, Explorer waits on that thread, so the taskbar
+  froze and could crash. The monitor now checks the credential sources on a worker thread, reads the
+  registry first and skips WSL entirely when no distro is installed, looks only at distros that are
+  already running, and ignores the appliances belonging to Docker Desktop, Rancher Desktop and
+  Podman, which no one signs in to and which took the full timeout to answer.
 
 ### Stale readings
 
