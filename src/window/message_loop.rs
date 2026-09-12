@@ -435,6 +435,20 @@ pub(super) unsafe extern "system" fn wnd_proc(
                 IDM_START_WITH_WINDOWS => {
                     set_startup_enabled(!is_startup_enabled());
                 }
+                IDM_DOCK_IN_TASKBAR => {
+                    {
+                        let mut state = lock_state();
+                        if let Some(s) = state.as_mut() {
+                            s.dock_in_taskbar = !s.dock_in_taskbar;
+                        }
+                    }
+                    save_state_settings();
+                    // The surface moves between the taskbar and the space above
+                    // it, so it has to be re-parented and repainted where it
+                    // now sits.
+                    position_at_taskbar();
+                    render_layered();
+                }
                 IDM_FREQ_1MIN | IDM_FREQ_5MIN | IDM_FREQ_15MIN | IDM_FREQ_1HOUR => {
                     let new_interval = match id {
                         IDM_FREQ_1MIN => POLL_1_MIN,

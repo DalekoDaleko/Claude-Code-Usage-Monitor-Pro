@@ -62,6 +62,8 @@ pub enum ContextMenuAction {
         provider: ContextMenuProvider,
     },
     ToggleStartup,
+    /// Allow or forbid hosting the widget inside the taskbar.
+    ToggleTaskbarDock,
     ToggleWidget,
     /// Accepted only so menus saved by older versions can be loaded and
     /// cleaned up. New menus cannot create or execute this legacy action.
@@ -283,6 +285,7 @@ pub fn rendered_label(
         "Settings" => language.text("Settings"),
         "Update frequency" => language.text("Update frequency"),
         "Start with Windows" => language.text("Start with Windows"),
+        "Dock in taskbar when possible" => language.text("Dock in taskbar when possible"),
         "Language" => language.text("Language"),
         "System default" => language.text("System default"),
         "Refresh" => language.text("Refresh"),
@@ -389,6 +392,11 @@ pub fn classic_context_menu() -> ContextMenuDocument {
                 "start-with-windows",
                 "Start with Windows",
                 Action::ToggleStartup,
+            ),
+            ContextMenuItem::action(
+                "dock-in-taskbar",
+                "Dock in taskbar when possible",
+                Action::ToggleTaskbarDock,
             ),
             ContextMenuItem::submenu("language", "Language", languages),
             ContextMenuItem::separator("settings-separator"),
@@ -672,6 +680,39 @@ mod tests {
         let mut legacy = menu.clone();
         legacy.id = LEGACY_CLASSIC_CONTEXT_MENU_ID.into();
         assert!(legacy.is_builtin());
+    }
+
+    #[test]
+    fn the_classic_menu_can_toggle_taskbar_docking() {
+        let menu = classic_context_menu();
+        let settings = menu
+            .items
+            .iter()
+            .find_map(|item| match &item.kind {
+                ContextMenuItemKind::Submenu { items } if item.id == "settings" => Some(items),
+                _ => None,
+            })
+            .expect("the Classic menu has a Settings submenu");
+        let dock = settings
+            .iter()
+            .find(|item| item.id == "dock-in-taskbar")
+            .expect("the Settings submenu offers the docking switch");
+        assert!(matches!(
+            dock.kind,
+            ContextMenuItemKind::Action {
+                action: ContextMenuAction::ToggleTaskbarDock
+            }
+        ));
+        assert!(menu.validate().is_empty());
+        let language = crate::localization::LanguageId::English;
+        let context = crate::theme_engine::DataContext::from_usage(
+            None,
+            &crate::theme_engine::Canvas::default(),
+        );
+        assert_eq!(
+            rendered_label(language, &dock.label, &context),
+            "Dock in taskbar when possible"
+        );
     }
 
     #[test]

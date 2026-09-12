@@ -119,36 +119,69 @@ pub(super) fn position_at_taskbar() {
     }
 }
 
+/// Whether the user has allowed the surface to be hosted inside the taskbar.
+fn dock_in_taskbar_enabled() -> bool {
+    lock_state()
+        .as_ref()
+        .is_some_and(|state| state.dock_in_taskbar)
+}
+
 /// Decide whether a taskbar-hosted surface has to float instead, and where.
 ///
-/// Returns `Some((x, y))` in screen pixels when the running-application strip
-/// leaves too little room for a `width`-wide surface in front of the
-/// notification area. Returns `None` when the surface fits, or when the taskbar
-/// cannot be measured — an unmeasurable taskbar keeps the previous in-taskbar
-/// behaviour rather than relocating the widget on a guess.
+/// Returns `Some((x, y))` in screen pixels when the surface is not to be hosted
+/// inside the taskbar: either because docking is turned off, or because the
+/// running-application strip leaves too little room for a `width`-wide surface
+/// in front of the notification area. Returns `None` when docking is on and the
+/// surface fits, or when docking is on and the taskbar cannot be measured — an
+/// unmeasurable taskbar keeps the in-taskbar behaviour rather than relocating
+/// the widget on a guess.
 fn taskbar_float_placement(
     taskbar: &native_interop::TaskbarWindow,
     display: RECT,
     width: i32,
     height: i32,
 ) -> Option<(i32, i32)> {
+    let docking = dock_in_taskbar_enabled();
     let layout = match crate::taskbar_layout::query(taskbar.hwnd) {
-        Some(layout) if !layout.fits(width) => layout,
+        Some(layout) if !docking || !layout.fits(width) => layout,
         // Fits, or the taskbar could not be measured: stay hosted in the
         // taskbar rather than relocating the widget on a guess.
-        _ => {
+        Some(_) => {
             set_floating_fallback(false, 0);
             return None;
         }
+        None if docking => {
+            set_floating_fallback(false, 0);
+            return None;
+        }
+        // Docking is off and the taskbar could not be measured. Float anyway,
+        // with no sampled backdrop: the measurement only decides the colour.
+        None => {
+            if !FLOATING_FALLBACK.load(Ordering::Relaxed) {
+                diagnose::log("floating above the taskbar; docking is turned off");
+            }
+            set_floating_fallback(true, 0);
+            return Some(clamp_float_origin(
+                saved_float_origin()
+                    .unwrap_or_else(|| default_float_origin(taskbar, display, width, height)),
+                display,
+                width,
+                height,
+            ));
+        }
     };
     if !FLOATING_FALLBACK.load(Ordering::Relaxed) {
-        diagnose::log(format!(
-            "taskbar gap {}px is too small for a {width}px surface (apps end at {}, tray starts at {}, overflow button {}); floating above the taskbar",
-            layout.available_width(),
-            layout.apps_right,
-            layout.tray_left,
-            if layout.overflow_visible { "shown" } else { "hidden" }
-        ));
+        if docking {
+            diagnose::log(format!(
+                "taskbar gap {}px is too small for a {width}px surface (apps end at {}, tray starts at {}, overflow button {}); floating above the taskbar",
+                layout.available_width(),
+                layout.apps_right,
+                layout.tray_left,
+                if layout.overflow_visible { "shown" } else { "hidden" }
+            ));
+        } else {
+            diagnose::log("floating above the taskbar; docking is turned off");
+        }
     }
     set_floating_fallback(true, sample_taskbar_backdrop(taskbar, &layout));
     Some(clamp_float_origin(

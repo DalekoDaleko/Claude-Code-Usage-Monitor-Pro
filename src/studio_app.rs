@@ -183,6 +183,7 @@ enum ContextMenuActionKind {
     SetUpdateFrequency,
     ToggleProvider,
     ToggleStartup,
+    ToggleTaskbarDock,
     ToggleWidget,
     SetLanguage,
     CheckForUpdates,
@@ -193,12 +194,13 @@ enum ContextMenuActionKind {
 }
 
 impl ContextMenuActionKind {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 13] = [
         Self::OpenDashboard,
         Self::Refresh,
         Self::SetUpdateFrequency,
         Self::ToggleProvider,
         Self::ToggleStartup,
+        Self::ToggleTaskbarDock,
         Self::ToggleWidget,
         Self::SetLanguage,
         Self::CheckForUpdates,
@@ -215,6 +217,7 @@ impl ContextMenuActionKind {
             Self::SetUpdateFrequency => "Set update frequency",
             Self::ToggleProvider => "Toggle provider",
             Self::ToggleStartup => "Toggle Start with Windows",
+            Self::ToggleTaskbarDock => "Toggle Dock in taskbar",
             Self::ToggleWidget => "Show widget",
             Self::SetLanguage => "Set language",
             Self::CheckForUpdates => "Check for updates",
@@ -236,6 +239,7 @@ impl ContextMenuActionKind {
                 provider: ContextMenuProvider::Claude,
             },
             Self::ToggleStartup => ContextMenuAction::ToggleStartup,
+            Self::ToggleTaskbarDock => ContextMenuAction::ToggleTaskbarDock,
             Self::ToggleWidget => ContextMenuAction::ToggleWidget,
             Self::SetLanguage => ContextMenuAction::SetLanguage {
                 language: "system".into(),

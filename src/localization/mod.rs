@@ -336,6 +336,7 @@ mod tests {
             "No expiry date stored",
             "No sign-in found",
             "Open-source licences",
+            "Dock in taskbar when possible",
         ];
 
         for language in LanguageId::ALL

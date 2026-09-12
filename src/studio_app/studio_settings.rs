@@ -121,6 +121,18 @@ impl StudioApp {
                 setting_separator(ui);
                 setting_row(
                     ui,
+                    language.text("Dock in taskbar when possible"),
+                    language.text("Otherwise the widget floats above the taskbar"),
+                    |ui| {
+                        changed |= Toggle::new(&mut self.settings.dock_in_taskbar)
+                            .labels(language.text("Enabled"), language.text("Disabled"))
+                            .show(ui)
+                            .changed();
+                    },
+                );
+                setting_separator(ui);
+                setting_row(
+                    ui,
                     language.text("Language"),
                     language.text("Language used by the app and widget"),
                     |ui| {

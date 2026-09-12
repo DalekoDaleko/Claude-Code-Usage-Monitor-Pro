@@ -205,8 +205,11 @@ application buttons and the "..." overflow button, making them unreachable.
   `OverflowButton`, `SystemTrayIcon`), so the genuine free gap is known rather than assumed. The
   legacy `ReBarWindow32` window reports a fixed span on Windows 11 and cannot distinguish a full
   taskbar from an empty one.
-- When the gap is too small, the widget now floats just above the taskbar instead of overlapping
-  it, snapped by default to the right edge of the screen.
+- The widget now floats just above the taskbar by default, snapped to the right edge of the screen,
+  rather than being hosted inside it. Windows sets no space aside in the taskbar for another
+  gadget, so whatever sits there covers something else. **Settings > Display > Dock in taskbar when
+  possible**, also in the tray menu under **Settings**, puts it back in the taskbar; it then still
+  floats whenever the gap is too small, which is what measuring the taskbar is for.
 - The floating widget can be dragged anywhere on screen, and its position persists across restarts
   (`float_x`/`float_y` in `settings.json`). A 4 px threshold distinguishes a drag from a click, so
   click actions still work.

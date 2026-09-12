@@ -74,6 +74,13 @@ pub struct SettingsFile {
     /// for the user's own CLI session to refresh the credentials file.
     #[serde(default = "default_true")]
     pub active_token_refresh: bool,
+    /// Whether the widget may sit inside the taskbar. Off by default: the
+    /// taskbar has no room set aside for another gadget, so a widget hosted
+    /// there covers whatever Windows has already put in that space. Turned on,
+    /// the widget still only docks when the running-application buttons leave
+    /// a wide enough gap, and floats above the taskbar when they do not.
+    #[serde(default)]
+    pub dock_in_taskbar: bool,
     /// Where the user dragged the widget while it was floating clear of a full
     /// taskbar. Absent until the widget is dragged, in which case it snaps to
     /// the right edge of the screen above the taskbar.
@@ -106,6 +113,7 @@ impl Default for SettingsFile {
             dashboard_width: None,
             dashboard_height: None,
             active_token_refresh: true,
+            dock_in_taskbar: false,
             float_x: None,
             float_y: None,
         }
@@ -701,6 +709,19 @@ mod tests {
         let counting_down = decode_settings(r#"{"usage_countdown":true}"#).unwrap();
         assert!(counting_down.usage_countdown);
         assert_eq!(settings_json(&counting_down)["usage_countdown"], true);
+    }
+
+    #[test]
+    fn the_widget_floats_unless_docking_is_asked_for() {
+        assert!(!SettingsFile::default().dock_in_taskbar);
+        // A settings file written before this switch existed: the taskbar has
+        // no room set aside for another gadget, so those users float too.
+        let settings = decode_settings(r#"{"poll_interval_ms":900000}"#).unwrap();
+        assert!(!settings.dock_in_taskbar);
+
+        let docked = decode_settings(r#"{"dock_in_taskbar":true}"#).unwrap();
+        assert!(docked.dock_in_taskbar);
+        assert_eq!(settings_json(&docked)["dock_in_taskbar"], true);
     }
 
     #[test]

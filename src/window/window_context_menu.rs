@@ -143,6 +143,7 @@ pub(super) fn context_menu_action_flags(
         }
         ContextMenuAction::ToggleProvider { provider } => state.providers.contains(*provider),
         ContextMenuAction::ToggleStartup => is_startup_enabled(),
+        ContextMenuAction::ToggleTaskbarDock => state.dock_in_taskbar,
         ContextMenuAction::ToggleWidget => state
             .active_theme
             .as_ref()
@@ -264,6 +265,7 @@ pub(super) fn execute_context_menu_action(
             Some(provider.descriptor().native_menu_command_id)
         }
         ContextMenuAction::ToggleStartup => Some(IDM_START_WITH_WINDOWS),
+        ContextMenuAction::ToggleTaskbarDock => Some(IDM_DOCK_IN_TASKBAR),
         ContextMenuAction::SetLanguage { language } => {
             if language.eq_ignore_ascii_case("system") {
                 Some(IDM_LANG_SYSTEM)

@@ -114,6 +114,8 @@ struct AppState {
     drag_start_client_x: i32,
     drag_start_offset: i32,
 
+    /// Whether the surface may be hosted inside the taskbar when it fits.
+    dock_in_taskbar: bool,
     /// Position the user dragged the surface to while it floated clear of a
     /// full taskbar. `None` until the first drag, which leaves the surface
     /// snapped to the right edge of the screen.
@@ -159,6 +161,7 @@ const IDM_FREQ_5MIN: u16 = 11;
 const IDM_FREQ_15MIN: u16 = 12;
 const IDM_FREQ_1HOUR: u16 = 13;
 const IDM_START_WITH_WINDOWS: u16 = 20;
+const IDM_DOCK_IN_TASKBAR: u16 = 21;
 const IDM_VERSION_ACTION: u16 = 31;
 const IDM_LANG_SYSTEM: u16 = 100;
 const IDM_LANG_FIRST: u16 = 101;
@@ -553,6 +556,7 @@ fn save_state_settings() {
             .as_ref()
             .map(|path| path.to_string_lossy().to_string());
         persisted.active_token_refresh = s.active_token_refresh;
+        persisted.dock_in_taskbar = s.dock_in_taskbar;
         persisted.float_x = s.float_x;
         persisted.float_y = s.float_y;
         // The dashboard process owns its dimensions, so leave the freshly
@@ -1970,6 +1974,7 @@ pub fn run() {
                 drag_start_mouse_x: 0,
                 drag_start_client_x: 0,
                 drag_start_offset: 0,
+                dock_in_taskbar: settings.dock_in_taskbar,
                 float_x: settings.float_x,
                 float_y: settings.float_y,
                 float_drag: None,
@@ -2561,6 +2566,7 @@ fn reload_external_settings(hwnd: HWND) {
         state.usage_countdown = settings.usage_countdown;
         state.active_token_refresh = settings.active_token_refresh;
         poller::set_active_token_refresh(settings.active_token_refresh);
+        state.dock_in_taskbar = settings.dock_in_taskbar;
         state.taskbar_index = settings.taskbar_index;
         apply_language_to_state(state, language_override);
     }
