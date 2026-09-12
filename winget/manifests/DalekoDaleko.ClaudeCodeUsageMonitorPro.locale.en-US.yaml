@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 PackageIdentifier: DalekoDaleko.ClaudeCodeUsageMonitorPro
-PackageVersion: 2.14.0
+PackageVersion: 2.15.0
 PackageLocale: en-US
 Publisher: Vitaliy Titov
 PublisherUrl: https://github.com/DalekoDaleko
@@ -64,6 +64,6 @@ Tags:
   - taskbar
   - usage
   - widget
-ReleaseNotesUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/tag/v2.14.0
+ReleaseNotesUrl: https://github.com/DalekoDaleko/Claude-Code-Usage-Monitor-Pro/releases/tag/v2.15.0
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0
