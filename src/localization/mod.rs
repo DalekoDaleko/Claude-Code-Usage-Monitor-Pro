@@ -335,6 +335,7 @@ mod tests {
             "Expired",
             "No expiry date stored",
             "No sign-in found",
+            "Open-source licences",
         ];
 
         for language in LanguageId::ALL
